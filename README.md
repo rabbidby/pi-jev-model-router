@@ -1,8 +1,8 @@
 # pi-jev-model-router
 
 A [pi](https://github.com/earendil-works/pi) extension that routes every prompt to
-a task-appropriate model using **TypeSafe Jev** (System One) typed judgments.
-You type normally; before the turn starts, Jev reads the request and answers four
+a task-appropriate model using **Jev** (System One) typed judgments through
+TypeSafe or OpenRouter. You type normally; before the turn starts, Jev reads the request and answers four
 narrow questions, code composes those into a capability tier, applies your budget
 policy, and pi switches to the matching model.
 
@@ -46,7 +46,9 @@ request.
 
 - pi (`@earendil-works/pi-coding-agent`)
 - Node.js 20+
-- A TypeSafe API key with access to `jev-latest` — <https://typesafe.ai>
+- One of:
+  - a TypeSafe API key with access to `jev-latest` — <https://typesafe.ai>
+  - an OpenRouter API key with access to Jev — <https://openrouter.ai>
 
 ## Install
 
@@ -94,14 +96,25 @@ pi update --extensions        # update packages
 pi remove npm:pi-jev-model-router
 ```
 
-### 3. Set your TypeSafe API key
+### 3. Choose where Jev runs
+
+TypeSafe remains the default:
 
 ```bash
 export TYPESAFE_API_KEY=...
 ```
 
-Add it to your shell profile to persist it. You can also set `apiKey` directly in
-the config file (see below).
+To run Jev through OpenRouter, set its key and select the provider:
+
+```bash
+export OPENROUTER_API_KEY=...
+export JEV_ROUTER_PROVIDER=openrouter
+```
+
+You can also run `/login openrouter`; the extension reuses pi's stored OpenRouter
+credential. To persist the provider choice in the router config instead of an
+environment variable, set `"jevProvider": "openrouter"`. A literal `apiKey` in
+that file works for either provider.
 
 ### 4. Use it
 
@@ -334,7 +347,39 @@ Later sources win:
 1. built-in defaults
 2. `~/.pi/agent/pi-jev-model-router.json`
 3. `<cwd>/.pi/pi-jev-model-router.json` (trusted projects only)
-4. env: `TYPESAFE_API_KEY`, `JEV_ROUTER_MODE` (`auto|confirm|notify`), `JEV_ROUTER_OFF=1`
+4. env: `TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`, `JEV_ROUTER_PROVIDER`
+   (`typesafe|openrouter`), `JEV_ROUTER_MODE` (`auto|confirm|notify`),
+   `JEV_ROUTER_OFF=1`
+
+### Jev provider
+
+The provider used for the routing judgment is independent of the providers in
+`routes` and `kindModels`. TypeSafe is the backward-compatible default:
+
+```json
+{
+  "jevProvider": "typesafe"
+}
+```
+
+To use OpenRouter's Decisions API instead:
+
+```json
+{
+  "jevProvider": "openrouter"
+}
+```
+
+Selecting a provider also selects its defaults:
+
+| Jev provider | Key environment variable | Endpoint | Model |
+| --- | --- | --- | --- |
+| `typesafe` | `TYPESAFE_API_KEY` | `https://api.typesafe.ai/v1/systemone` | `jev-latest` |
+| `openrouter` | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/alpha/decisions` | `~typesafe/jev-latest` |
+
+You can override `apiKeyEnv`, `endpoint`, or `jevModel` as before. `apiKey` in
+the config takes priority over the environment. For OpenRouter, the extension
+also falls back to credentials stored by pi's `/login openrouter` flow.
 
 A full example lives at
 [`extensions/pi-jev-model-router/pi-jev-model-router.example.json`](extensions/pi-jev-model-router/pi-jev-model-router.example.json).
@@ -420,9 +465,10 @@ entirely when a model's pricing is unknown, so it never blocks on guesses. Set
 | `enabled` | `true` | Master switch |
 | `useDefaultModels` | `true` | `false` drops the built-in model chains so only your config's models are used |
 | `mode` | `"auto"` | `auto` \| `confirm` \| `notify` |
-| `apiKeyEnv` / `apiKey` | `TYPESAFE_API_KEY` | TypeSafe credentials |
-| `endpoint` | `https://api.typesafe.ai/v1/systemone` | Evaluation endpoint |
-| `jevModel` | `"jev-latest"` | Jev model alias |
+| `jevProvider` | `"typesafe"` | Where Jev runs: `typesafe` or `openrouter` |
+| `apiKeyEnv` / `apiKey` | provider-specific | Jev provider credentials |
+| `endpoint` | provider-specific | Decisions endpoint |
+| `jevModel` | provider-specific | Jev model alias |
 | `timeoutMs` | `3500` | Jev request timeout (retries 429/529) |
 | `minPromptChars` | `12` | Below this, a prompt counts as a continuation (a short *first* message is still routed) |
 | `historyTurns` | `4` | Conversation turns included as Jev state |
@@ -437,9 +483,9 @@ entirely when a model's pricing is unknown, so it never blocks on guesses. Set
 
 ## Failure behaviour
 
-Routing never blocks your turn. A missing key, network error, timeout (default
-3.5 s, retried on 429/529), or unknown model means: warn in the status line and
-run the prompt on the current model unchanged. Prompts starting with `/`, pure
+Routing never blocks your turn. A missing TypeSafe/OpenRouter key, network error,
+timeout (default 3.5 s, retried on 429/529), or unknown model means: warn in the
+status line and run the prompt on the current model unchanged. Prompts starting with `/`, pure
 acknowledgements (`yes`, `continue`, …), and messages sent by other extensions
 are never routed.
 
@@ -507,12 +553,12 @@ Layout:
 | --- | --- |
 | `extensions/pi-jev-model-router/index.ts` | pi wiring: events, commands, `jev_route` tool, model switching, transcript entries |
 | `extensions/pi-jev-model-router/config.ts` | config types, defaults, layered loading, task taxonomy |
-| `extensions/pi-jev-model-router/jev.ts` | TypeSafe HTTP client, question definitions, response parsing |
+| `extensions/pi-jev-model-router/jev.ts` | TypeSafe/OpenRouter Decisions client, question definitions, response parsing |
 | `extensions/pi-jev-model-router/router.ts` | composition (`decide`), tier/kind chains, availability fallback |
 | `extensions/pi-jev-model-router/budget.ts` | spend ledger, caps, pressure |
 
-No runtime dependencies: the extension talks to TypeSafe with plain `fetch`. It
-imports `typebox` (tool schema) and `@earendil-works/pi-coding-agent` (config
+No runtime dependencies: the extension talks to TypeSafe or OpenRouter with plain
+`fetch`. It imports `typebox` (tool schema) and `@earendil-works/pi-coding-agent` (config
 directory path), and loads `@earendil-works/pi-tui` **lazily**, only when the host
 implements `registerEntryRenderer`. `@earendil-works/pi-tui` is declared as an
 **optional** peer dependency, so hosts that don't ship it still install and run.

@@ -1,7 +1,7 @@
 # pi-jev-model-router
 
-A pi extension that routes every prompt to a model tier using **TypeSafe Jev**
-(System One) typed judgments. You type normally; before the turn starts, Jev
+A pi extension that routes every prompt to a model tier using **Jev**
+(System One) typed judgments through TypeSafe or OpenRouter. You type normally; before the turn starts, Jev
 reads the request and answers four narrow questions, code composes those into a
 tier, applies your budget policy, and pi switches to the matching model.
 
@@ -71,11 +71,21 @@ route, or `jev-router:off` when disabled.
 This extension lives at `~/.pi/agent/extensions/pi-jev-model-router/` (global, auto-discovered).
 pi hot-reloads it with `/reload` after edits.
 
-It needs a TypeSafe API key:
+TypeSafe is the default Jev provider:
 
 ```sh
 export TYPESAFE_API_KEY=...
 ```
+
+To use Jev through OpenRouter instead:
+
+```sh
+export OPENROUTER_API_KEY=...
+export JEV_ROUTER_PROVIDER=openrouter
+```
+
+You can also set `"jevProvider": "openrouter"` in the config file. The extension
+accepts `apiKey` there and can reuse credentials saved by `/login openrouter`.
 
 ## Commands
 
@@ -98,12 +108,17 @@ a subtask.
 Optional. Create `~/.pi/agent/pi-jev-model-router.json`
 (see `pi-jev-model-router.example.json`), or `<project>/.pi/pi-jev-model-router.json` for
 project-specific routes. Later sources win: defaults → global → project → env
-(`JEV_ROUTER_MODE`, `JEV_ROUTER_OFF=1`).
+(`JEV_ROUTER_PROVIDER`, `JEV_ROUTER_MODE`, `JEV_ROUTER_OFF=1`). Selecting
+`openrouter` uses `OPENROUTER_API_KEY`,
+`https://openrouter.ai/api/alpha/decisions`, and `~typesafe/jev-latest`; selecting
+`typesafe` uses the existing TypeSafe defaults. You can still override
+`apiKeyEnv`, `endpoint`, and `jevModel`.
 
 ```json
 {
   "enabled": true,
   "mode": "auto",
+  "jevProvider": "openrouter",
   "confidenceThreshold": 0.34,
   "stickiness": true,
   "budget": { "dailyUsd": 5, "monthlyUsd": 100, "softRatio": 0.7, "hardRatio": 0.9 },
@@ -200,14 +215,14 @@ as an error.
 | --- | --- |
 | `index.ts` | pi wiring: events, commands, `jev_route` tool, model switching |
 | `config.ts` | config types, defaults, layered loading |
-| `jev.ts` | TypeSafe HTTP client, question definitions, response parsing |
+| `jev.ts` | TypeSafe/OpenRouter Decisions client, question definitions, response parsing |
 | `router.ts` | composition (`decide`), tier/kind chains, availability fallback |
 | `budget.ts` | spend ledger, caps, pressure |
 
 ## Failure behaviour
 
-Routing never blocks your turn. A missing key, network error, timeout (default
-3.5 s, retried on 429/529), or unknown model means: warn in the status line and
+Routing never blocks your turn. A missing TypeSafe/OpenRouter key, network error,
+timeout (default 3.5 s, retried on 429/529), or unknown model means: warn in the status line and
 run the prompt on the current model unchanged.
 
 ## Compatibility

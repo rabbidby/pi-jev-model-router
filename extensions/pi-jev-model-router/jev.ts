@@ -147,6 +147,7 @@ async function postWithRetry(
   body: unknown,
   signal: AbortSignal,
 ): Promise<unknown> {
+  const service = config.jevProvider === "openrouter" ? "OpenRouter" : "TypeSafe";
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (signal.aborted) throw new JevError("aborted");
@@ -156,16 +157,17 @@ async function postWithRetry(
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
+          ...(config.jevProvider === "openrouter" ? { "X-Title": "pi-jev-model-router" } : {}),
         },
         body: JSON.stringify(body),
         signal,
       });
       if (res.status === 429 || res.status === 529) {
-        throw new JevError(`TypeSafe overloaded (${res.status})`, res.status);
+        throw new JevError(`${service} overloaded (${res.status})`, res.status);
       }
       if (!res.ok) {
         const detail = await res.text().catch(() => "");
-        throw new JevError(`TypeSafe ${res.status}: ${detail.slice(0, 300)}`, res.status);
+        throw new JevError(`${service} ${res.status}: ${detail.slice(0, 300)}`, res.status);
       }
       return await res.json();
     } catch (error) {
@@ -175,7 +177,7 @@ async function postWithRetry(
       await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
     }
   }
-  throw lastError instanceof Error ? lastError : new JevError("TypeSafe request failed");
+  throw lastError instanceof Error ? lastError : new JevError(`${service} request failed`);
 }
 
 /** Run one Jev evaluation (4 questions, parallel server-side) for the prompt. */
