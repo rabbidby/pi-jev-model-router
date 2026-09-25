@@ -507,7 +507,9 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    runtime.config = loadConfig(ctx.cwd);
+    const projectTrusted =
+      typeof ctx.isProjectTrusted === "function" && ctx.isProjectTrusted();
+    runtime.config = loadConfig(ctx.cwd, projectTrusted);
     runtime.ledger = loadLedger(runtime.config.stateFile);
     runtime.models = toAvailable(ctx);
     runtime.appliedTierIndex = tierForModel(currentModelKey(ctx), runtime.config);

@@ -297,10 +297,10 @@ export function configPaths(cwd?: string): { global: string; project?: string } 
   };
 }
 
-export function loadConfig(cwd?: string): JevRouterConfig {
+export function loadConfig(cwd?: string, projectTrusted = false): JevRouterConfig {
   const paths = configPaths(cwd);
   const globalPatch = readJson(paths.global);
-  const projectPatch = paths.project ? readJson(paths.project) : undefined;
+  const projectPatch = projectTrusted && paths.project ? readJson(paths.project) : undefined;
   const patches = [globalPatch, projectPatch];
 
   // `useDefaultModels: false` means "bring your own models": start from empty
