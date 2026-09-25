@@ -194,35 +194,47 @@ export function decide(
   const kindChain = (config.kindModels[analysis.kind] ?? [])
     .filter((target) => tierIndex(target.minTier) <= index)
     .sort((a, b) => tierIndex(b.minTier) - tierIndex(a.minTier));
-  const ordered: RouteTarget[] = [...kindChain, ...config.routes[TIERS[index]]];
+  const ordered: Array<{ target: RouteTarget; tierIndex: number; kindSpecialised: boolean }> = [
+    ...kindChain.map((target) => ({ target, tierIndex: index, kindSpecialised: true })),
+    ...config.routes[TIERS[index]].map((target) => ({ target, tierIndex: index, kindSpecialised: false })),
+  ];
   for (let offset = 1; offset < TIERS.length; offset += 1) {
-    if (index - offset >= 0) ordered.push(...config.routes[TIERS[index - offset]]);
-    if (index + offset < TIERS.length) ordered.push(...config.routes[TIERS[index + offset]]);
+    if (index - offset >= 0) {
+      ordered.push(
+        ...config.routes[TIERS[index - offset]].map((target) => ({
+          target,
+          tierIndex: index - offset,
+          kindSpecialised: false,
+        })),
+      );
+    }
+    if (index + offset < TIERS.length) {
+      ordered.push(
+        ...config.routes[TIERS[index + offset]].map((target) => ({
+          target,
+          tierIndex: index + offset,
+          kindSpecialised: false,
+        })),
+      );
+    }
   }
 
-  const available = firstAvailable(options.models, ordered);
+  const available = ordered
+    .map((candidate) => {
+      const model = findModel(options.models, candidate.target);
+      return model ? { ...candidate, model } : undefined;
+    })
+    .find((candidate) => candidate !== undefined);
   if (!available) return undefined;
 
   const currentIndex = options.current?.index;
   const currentModel = options.current?.model;
 
-  const usedKindChain = kindChain.some(
-    (t) => t.provider === available.target.provider && t.model === available.target.model,
-  );
-  const effectiveIndex = usedKindChain
-    ? index
-    : Math.max(
-        index,
-        TIERS.findIndex((tier) =>
-          config.routes[tier].some(
-            (t) => t.provider === available.target.provider && t.model === available.target.model,
-          ),
-        ),
-      );
-  if (effectiveIndex !== index) {
-    notes.push(`${TIERS[index]} chain unavailable → ${TIERS[effectiveIndex]}`);
-    downgraded = effectiveIndex < index;
-    index = effectiveIndex;
+  const usedKindChain = available.kindSpecialised;
+  if (available.tierIndex !== index) {
+    notes.push(`${TIERS[index]} chain unavailable → ${TIERS[available.tierIndex]}`);
+    downgraded = available.tierIndex < index;
+    index = available.tierIndex;
   }
 
   // Cache guard: a model switch discards the provider's prompt cache, so the next
