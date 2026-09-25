@@ -26,7 +26,6 @@ import { classifyRequest, JevError, type RouteAnalysis } from "./jev";
 import {
   decide,
   describeDecision,
-  findModel,
   firstAvailable,
   tierIndex,
   tierForModel,
@@ -327,11 +326,11 @@ async function applyDecision(
   runtime: Runtime,
   options: { allowPrompt?: boolean } = {},
 ): Promise<ApplyResult> {
-  const target = decision.model
+  let target = decision.model
     ? `${decision.model.provider}/${decision.model.id}`
     : `${decision.target.provider}/${decision.target.model}`;
-  const headline = `Jev → ${decision.tier} (${target})`;
-  const detail = `${decision.reason}${decision.notes.length ? ` · ${decision.notes.join(" · ")}` : ""}`;
+  let headline = `Jev → ${decision.tier} (${target})`;
+  let detail = `${decision.reason}${decision.notes.length ? ` · ${decision.notes.join(" · ")}` : ""}`;
   const currentKey = currentModelKey(ctx);
   const targetKey = decision.model ? `${decision.model.provider}/${decision.model.id}` : undefined;
   const keepCurrent =
@@ -339,6 +338,9 @@ async function applyDecision(
     (runtime.config.stickiness && targetKey !== undefined && currentKey === targetKey);
 
   if (keepCurrent) {
+    if (decision.target.thinkingLevel) {
+      setThinking(decision.target.thinkingLevel);
+    }
     runtime.appliedTierIndex = decision.tierIndex;
     runtime.lastDecision = decision;
     runtime.lastAnalysis = analysis;
@@ -359,27 +361,38 @@ async function applyDecision(
     options.allowPrompt !== false &&
     typeof ctx.ui?.select === "function"
   ) {
-    const cheaper = TIERS[Math.max(0, decision.tierIndex - 1)];
-    const cheaperTarget = runtime.config.routes[cheaper][0];
-    const options_ = [
-      `Use ${decision.tier} — ${target}`,
-      `Use ${cheaper} — ${cheaperTarget.provider}/${cheaperTarget.model}`,
-      `Keep ${currentModelKey(ctx) ?? "current model"}`,
-    ];
-    const choice = await ctx.ui.select(`Jev suggests ${decision.tier}\n${detail}`, options_);
-    if (!choice || choice.startsWith("Keep")) {
+    const recommendedOption = `Use ${decision.tier} — ${target}`;
+    const cheaper = decision.tierIndex > 0 ? TIERS[decision.tierIndex - 1] : undefined;
+    const cheaperAvailable = cheaper
+      ? firstAvailable(runtime.models, runtime.config.routes[cheaper])
+      : undefined;
+    const cheaperOption = cheaper && cheaperAvailable
+      ? `Use ${cheaper} — ${cheaperAvailable.model.provider}/${cheaperAvailable.model.id}`
+      : undefined;
+    const keepOption = `Keep ${currentModelKey(ctx) ?? "current model"}`;
+    const choices = [recommendedOption, ...(cheaperOption ? [cheaperOption] : []), keepOption];
+    const choice = await ctx.ui.select(`Jev suggests ${decision.tier}\n${detail}`, choices);
+    if (!choice || choice === keepOption) {
       appendDecisionEntry(analysis, decision, "skipped", runtime);
       return { action: "skipped", message: "kept current model" };
     }
-    if (choice.startsWith(`Use ${cheaper}`)) {
-      const cheaperModel = findModel(runtime.models, cheaperTarget);
-      if (cheaperModel) {
-        decision.model = cheaperModel;
-        decision.target = cheaperTarget;
-        decision.tier = cheaper;
-        decision.tierIndex = tierIndex(cheaper);
-      }
+    if (choice === cheaperOption && cheaper && cheaperAvailable) {
+      decision.model = cheaperAvailable.model;
+      decision.target = cheaperAvailable.target;
+      decision.tier = cheaper;
+      decision.tierIndex = tierIndex(cheaper);
+      decision.downgraded = true;
+      decision.kindSpecialised = false;
+    } else if (choice !== recommendedOption) {
+      appendDecisionEntry(analysis, decision, "skipped", runtime);
+      return { action: "skipped", message: "kept current model" };
     }
+
+    target = decision.model
+      ? `${decision.model.provider}/${decision.model.id}`
+      : `${decision.target.provider}/${decision.target.model}`;
+    headline = `Jev → ${decision.tier} (${target})`;
+    detail = `${decision.reason}${decision.notes.length ? ` · ${decision.notes.join(" · ")}` : ""}`;
   }
 
   const model =
