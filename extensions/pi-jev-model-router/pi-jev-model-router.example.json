@@ -1,6 +1,7 @@
 {
   "enabled": true,
   "mode": "auto",
+  "jevProvider": "openrouter",
   "useDefaultModels": true,
   "minPromptChars": 12,
   "historyTurns": 4,

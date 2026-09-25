@@ -1,8 +1,8 @@
 /**
- * pi-jev-model-router — TypeSafe Jev model router for pi.
+ * pi-jev-model-router — Jev model router for pi.
  *
- * On every user prompt: send the request to Jev (System One), get typed
- * judgments about what the work is, how hard it is, and how much capability it
+ * On every user prompt: send the request to Jev through TypeSafe or OpenRouter,
+ * get typed judgments about what the work is, how hard it is, and how much capability it
  * deserves, then route the turn to the matching model tier. Code applies the
  * budget policy; Jev only judges the task.
  *
@@ -12,7 +12,7 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { apiKeyFor, hasApiKey, loadConfig, TIERS, type JevRouterConfig } from "./config";
+import { apiKeyFor, loadConfig, TIERS, type JevRouterConfig } from "./config";
 import {
   formatUsd,
   loadLedger,
@@ -235,6 +235,22 @@ function shouldSkip(text: string, config: JevRouterConfig, hasHistory: boolean):
   return undefined;
 }
 
+async function apiKeyForContext(config: JevRouterConfig, ctx: ExtensionContext): Promise<string> {
+  const configured = apiKeyFor(config);
+  if (configured) return configured;
+  if (config.jevProvider !== "openrouter") return "";
+  try {
+    return (await ctx.modelRegistry?.getApiKeyForProvider?.("openrouter"))?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function missingApiKeyMessage(config: JevRouterConfig): string {
+  const loginHint = config.jevProvider === "openrouter" ? " or run /login openrouter" : "";
+  return `missing ${config.jevProvider} API key (set ${config.apiKeyEnv}, add \"apiKey\" to the router config${loginHint})`;
+}
+
 function statusLine(ctx: ExtensionContext, runtime: Runtime): void {
   const spend = spendSnapshot(runtime.ledger, runtime.config.budget);
   if (!runtime.config.enabled) {
@@ -255,8 +271,9 @@ async function analyse(
   runtime: Runtime,
 ): Promise<{ analysis: RouteAnalysis; decision?: Decision } | { error: string }> {
   const config = runtime.config;
-  if (!hasApiKey(config)) {
-    return { error: `missing API key (env ${config.apiKeyEnv})` };
+  const apiKey = await apiKeyForContext(config, ctx);
+  if (!apiKey) {
+    return { error: missingApiKeyMessage(config) };
   }
   if (runtime.models.length === 0) runtime.models = toAvailable(ctx);
   const spend = spendSnapshot(runtime.ledger, config.budget);
@@ -274,7 +291,7 @@ async function analyse(
       spend,
     },
     config,
-    apiKeyFor(config),
+    apiKey,
     ctx.signal,
   );
 
@@ -495,11 +512,8 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
     runtime.models = toAvailable(ctx);
     runtime.appliedTierIndex = tierForModel(currentModelKey(ctx), runtime.config);
     statusLine(ctx, runtime);
-    if (runtime.config.enabled && !hasApiKey(runtime.config)) {
-      notify(ctx, 
-        `pi-jev-model-router: no API key. Set ${runtime.config.apiKeyEnv} or add "apiKey" to ~/.pi/agent/pi-jev-model-router.json.`,
-        "warning",
-      );
+    if (runtime.config.enabled && !(await apiKeyForContext(runtime.config, ctx))) {
+      notify(ctx, `pi-jev-model-router: ${missingApiKeyMessage(runtime.config)}.`, "warning");
     }
     if (runtime.config.enabled && !runtime.config.useDefaultModels) {
       const emptyTiers = TIERS.filter((tier) => runtime.config.routes[tier].length === 0);
@@ -580,7 +594,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
   });
 
   if (hasCommands) pi.registerCommand("jev-router", {
-    description: "TypeSafe Jev model router: status, on/off, mode, budget",
+    description: "Jev model router: status, on/off, mode, budget",
     handler: async (args, ctx) => {
       const [sub, ...rest] = args.trim().split(/\s+/).filter(Boolean);
       switch ((sub ?? "status").toLowerCase()) {
@@ -670,8 +684,9 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
           const lines = [
             `enabled: ${runtime.config.enabled}`,
             `mode: ${runtime.config.mode}`,
+            `jev provider: ${runtime.config.jevProvider}`,
             `jev model: ${runtime.config.jevModel}`,
-            `api key: ${hasApiKey(runtime.config) ? `${runtime.config.apiKeyEnv} ✓` : "missing"}`,
+            `api key: ${(await apiKeyForContext(runtime.config, ctx)) ? "configured ✓" : "missing"}`,
             `current model: ${currentModelKey(ctx) ?? "unknown"}`,
             `spend today: ${formatUsd(spend.today)}${spend.dailyCap ? ` / ${formatUsd(spend.dailyCap)}` : ""}`,
             `spend month: ${formatUsd(spend.month)}${spend.monthlyCap ? ` / ${formatUsd(spend.monthlyCap)}` : ""}`,
@@ -734,8 +749,8 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
     name: "jev_route",
     label: "Jev Route",
     description:
-      "Ask TypeSafe Jev what kind of work a request is and which model tier it deserves. Returns typed judgments (task kind, complexity, capability deserved, deep-reasoning need) plus a recommended model from the configured tiers. Use when deciding how much model to spend on a subtask.",
-    promptSnippet: "Classify a request with TypeSafe Jev and get a recommended model tier",
+      "Ask Jev what kind of work a request is and which model tier it deserves. Returns typed judgments (task kind, complexity, capability deserved, deep-reasoning need) plus a recommended model from the configured tiers. Use when deciding how much model to spend on a subtask.",
+    promptSnippet: "Classify a request with Jev and get a recommended model tier",
     parameters: Type.Object({
       request: Type.String({ description: "The request or task text to classify" }),
     }),

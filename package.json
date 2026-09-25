@@ -1,7 +1,7 @@
 {
   "name": "pi-jev-model-router",
   "version": "0.3.0",
-  "description": "Route pi prompts to task-appropriate model tiers with TypeSafe Jev typed judgments. Budget-aware, with automatic fallback.",
+  "description": "Route pi prompts to task-appropriate model tiers with Jev judgments through TypeSafe or OpenRouter. Budget-aware, with automatic fallback.",
   "author": {
     "name": "Shah Rukh",
     "email": "shah@da-vinci-noob.com"
@@ -11,6 +11,7 @@
     "pi",
     "pi-coding-agent",
     "typesafe",
+    "openrouter",
     "jev",
     "system-one",
     "model-router",

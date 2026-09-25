@@ -10,9 +10,11 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
  *   1. DEFAULTS below
  *   2. ~/.pi/agent/pi-jev-model-router.json
  *   3. <cwd>/.pi/pi-jev-model-router.json   (only in a trusted project)
- *   4. env: TYPESAFE_API_KEY / JEV_ROUTER_MODE / JEV_ROUTER_OFF
+ *   4. env: TYPESAFE_API_KEY / OPENROUTER_API_KEY /
+ *      JEV_ROUTER_PROVIDER / JEV_ROUTER_MODE / JEV_ROUTER_OFF
  */
 
+export type JevProvider = "typesafe" | "openrouter";
 export type Tier = "quick" | "standard" | "high" | "premium";
 export const TIERS: readonly Tier[] = ["quick", "standard", "high", "premium"] as const;
 
@@ -76,6 +78,8 @@ export interface JevRouterConfig {
    * defaults (endpoint, timeouts, budget, kind floors) still apply.
    */
   useDefaultModels: boolean;
+  /** Service used to run Jev judgments. This is separate from routed model providers. */
+  jevProvider: JevProvider;
   apiKeyEnv: string;
   apiKey?: string;
   endpoint: string;
@@ -102,13 +106,28 @@ export interface JevRouterConfig {
   cache: CacheConfig;
 }
 
+const JEV_PROVIDER_DEFAULTS: Record<
+  JevProvider,
+  Pick<JevRouterConfig, "apiKeyEnv" | "endpoint" | "jevModel">
+> = {
+  typesafe: {
+    apiKeyEnv: "TYPESAFE_API_KEY",
+    endpoint: "https://api.typesafe.ai/v1/systemone",
+    jevModel: "jev-latest",
+  },
+  openrouter: {
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    endpoint: "https://openrouter.ai/api/alpha/decisions",
+    jevModel: "~typesafe/jev-latest",
+  },
+};
+
 export const DEFAULT_CONFIG: JevRouterConfig = {
   enabled: true,
   mode: "auto",
   useDefaultModels: true,
-  apiKeyEnv: "TYPESAFE_API_KEY",
-  endpoint: "https://api.typesafe.ai/v1/systemone",
-  jevModel: "jev-latest",
+  jevProvider: "typesafe",
+  ...JEV_PROVIDER_DEFAULTS.typesafe,
   timeoutMs: 3500,
   minPromptChars: 12,
   historyTurns: 4,
@@ -282,21 +301,40 @@ export function loadConfig(cwd?: string): JevRouterConfig {
   const paths = configPaths(cwd);
   const globalPatch = readJson(paths.global);
   const projectPatch = paths.project ? readJson(paths.project) : undefined;
+  const patches = [globalPatch, projectPatch];
 
   // `useDefaultModels: false` means "bring your own models": start from empty
   // chains so the built-ins are not available as a base or as fallback.
   // The last source that sets it wins.
-  const explicit = [globalPatch, projectPatch]
+  const explicit = patches
     .map((patch) => asRecord(patch).useDefaultModels)
     .filter((value): value is boolean => typeof value === "boolean");
   const useDefaults = explicit.length > 0 ? explicit[explicit.length - 1] : DEFAULT_CONFIG.useDefaultModels;
 
+  const configuredProviders = patches
+    .map((patch) => asRecord(patch).jevProvider)
+    .filter((value): value is JevProvider => value === "typesafe" || value === "openrouter");
+  const envProvider = process.env.JEV_ROUTER_PROVIDER?.toLowerCase();
+  const jevProvider: JevProvider =
+    envProvider === "typesafe" || envProvider === "openrouter"
+      ? envProvider
+      : configuredProviders.at(-1) ?? DEFAULT_CONFIG.jevProvider;
+
+  const providerDefaults = JEV_PROVIDER_DEFAULTS[jevProvider];
   let config = useDefaults
-    ? { ...DEFAULT_CONFIG }
-    : { ...DEFAULT_CONFIG, routes: emptyChains(), kindModels: {} };
+    ? { ...DEFAULT_CONFIG, ...providerDefaults, jevProvider }
+    : {
+        ...DEFAULT_CONFIG,
+        ...providerDefaults,
+        jevProvider,
+        routes: emptyChains(),
+        kindModels: {},
+      };
 
   if (globalPatch) config = merge(config, globalPatch);
   if (projectPatch) config = merge(config, projectPatch);
+  // The environment selects the provider last, just like the other env overrides.
+  config.jevProvider = jevProvider;
 
   if (process.env.JEV_ROUTER_MODE) {
     const mode = process.env.JEV_ROUTER_MODE.toLowerCase();
@@ -310,12 +348,6 @@ export function loadConfig(cwd?: string): JevRouterConfig {
 
 function emptyChains(): Record<Tier, RouteChain> {
   return { quick: [], standard: [], high: [], premium: [] };
-}
-
-export function hasApiKey(config: JevRouterConfig): boolean {
-  if (config.apiKey && config.apiKey.trim().length > 0) return true;
-  const value = process.env[config.apiKeyEnv];
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 export function apiKeyFor(config: JevRouterConfig): string {
