@@ -86,7 +86,7 @@ export interface JevRouterConfig {
   jevModel: string;
   timeoutMs: number;
   minPromptChars: number;
-  /** How many recent conversation turns to include as Jev state. */
+  /** Recent conversation turns sent to Jev; 0 keeps conversation history local. */
   historyTurns: number;
   /** Below this choice confidence, fall back to the safe tier. */
   confidenceThreshold: number;
@@ -130,7 +130,7 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
   ...JEV_PROVIDER_DEFAULTS.typesafe,
   timeoutMs: 3500,
   minPromptChars: 12,
-  historyTurns: 4,
+  historyTurns: 0,
   confidenceThreshold: 0.34,
   stickiness: true,
   stateFile: join(homedir(), CONFIG_DIR_NAME, "agent", "pi-jev-model-router-state.json"),

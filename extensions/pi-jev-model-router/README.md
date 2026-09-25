@@ -87,6 +87,20 @@ export JEV_ROUTER_PROVIDER=openrouter
 You can also set `"jevProvider": "openrouter"` in the config file. The extension
 accepts `apiKey` there and can reuse credentials saved by `/login openrouter`.
 
+## Data sent to Jev
+
+Each classification sends the current request text, configured Jev model
+identifier, fixed routing questions and task taxonomy, plus the credential in
+the HTTP authorization header. Conversation history is not sent by default.
+Setting `historyTurns` above `0` explicitly opts in recent user and assistant
+text, capped at 600 characters per message and 4,000 characters in total.
+Images and tool results are not included.
+
+The working directory, active routed model, context token count, session ID,
+ledger, spend totals, and budget caps stay local. Routing code uses them only
+after Jev returns its semantic judgment. Review a custom `endpoint` before
+opting into history and consult the endpoint provider's data-retention policy.
+
 ## Commands
 
 | Command | What it does |
@@ -120,6 +134,7 @@ project-specific routes. Later sources win: defaults → global → project → 
   "mode": "auto",
   "jevProvider": "openrouter",
   "confidenceThreshold": 0.34,
+  "historyTurns": 0,
   "stickiness": true,
   "budget": { "dailyUsd": 5, "monthlyUsd": 100, "softRatio": 0.7, "hardRatio": 0.9 },
   "routes": {

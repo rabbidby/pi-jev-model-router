@@ -9,7 +9,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-test("classifyRequest sends task context and parses typed judgments", async () => {
+test("classifyRequest sends only opted-in task context and parses judgments", async () => {
   let requestBody: Record<string, any> | undefined;
   let requestHeaders: Headers | undefined;
   globalThis.fetch = (async (_input, init) => {
@@ -37,10 +37,6 @@ test("classifyRequest sends task context and parses typed judgments", async () =
     {
       prompt: "Diagnose the failing request",
       history: "user: It returns 500",
-      cwd: "/project",
-      activeModel: "openai-codex/gpt-test",
-      contextTokens: 1234,
-      spend: { today: 1, month: 2, pressure: 0.25, dailyCap: 4, monthlyCap: 8 },
     },
     config,
     "secret",
@@ -49,9 +45,10 @@ test("classifyRequest sends task context and parses typed judgments", async () =
   assert.equal(requestHeaders?.get("authorization"), "Bearer secret");
   assert.equal(requestHeaders?.get("x-title"), "pi-jev-model-router");
   assert.equal(requestBody?.model, "jev-test");
-  assert.equal(requestBody?.state.request, "Diagnose the failing request");
-  assert.equal(requestBody?.state.environment.active_model, "openai-codex/gpt-test");
-  assert.equal(requestBody?.state.budget.fraction_of_budget_used, 0.25);
+  assert.deepEqual(requestBody?.state, {
+    request: "Diagnose the failing request",
+    conversation_excerpt: "user: It returns 500",
+  });
   assert.equal(Object.keys(requestBody?.questions).length, 4);
   assert.deepEqual(result, {
     kind: "debug",
@@ -67,10 +64,12 @@ test("classifyRequest sends task context and parses typed judgments", async () =
   });
 });
 
-test("classifyRequest reports a non-retryable provider error", async () => {
+test("classifyRequest omits all optional context when it is not supplied", async () => {
   let calls = 0;
-  globalThis.fetch = (async () => {
+  let requestBody: Record<string, any> | undefined;
+  globalThis.fetch = (async (_input, init) => {
     calls += 1;
+    requestBody = JSON.parse(String(init?.body));
     return new Response("invalid key", { status: 401 });
   }) as typeof fetch;
 
@@ -79,11 +78,12 @@ test("classifyRequest reports a non-retryable provider error", async () => {
 
   await assert.rejects(
     classifyRequest(
-      { prompt: "Classify this", spend: { today: 0, month: 0, pressure: 0 } },
+      { prompt: "Classify this" },
       config,
       "invalid",
     ),
     (error: unknown) => error instanceof JevError && error.status === 401 && /invalid key/.test(error.message),
   );
   assert.equal(calls, 1);
+  assert.deepEqual(requestBody?.state, { request: "Classify this" });
 });

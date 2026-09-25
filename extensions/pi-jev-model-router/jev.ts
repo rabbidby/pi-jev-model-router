@@ -1,6 +1,5 @@
 import type { JevRouterConfig } from "./config";
 import { TASK_KINDS } from "./config";
-import type { SpendSnapshot } from "./budget";
 
 /**
  * Typed judgments asked of Jev for a single incoming request.
@@ -29,11 +28,8 @@ export interface RouteAnalysis {
 
 export interface ClassifyInput {
   prompt: string;
+  /** Explicit opt-in conversation context. Omitted by default. */
   history?: string;
-  cwd?: string;
-  activeModel?: string;
-  contextTokens?: number;
-  spend: SpendSnapshot;
 }
 
 export class JevError extends Error {
@@ -49,19 +45,7 @@ export class JevError extends Error {
 function buildState(input: ClassifyInput): Record<string, unknown> {
   return {
     request: input.prompt,
-    conversation_excerpt: input.history?.slice(-4000) ?? null,
-    environment: {
-      cwd: input.cwd ?? null,
-      active_model: input.activeModel ?? null,
-      context_tokens_used: input.contextTokens ?? null,
-    },
-    budget: {
-      spent_today_usd: input.spend.today,
-      spent_this_month_usd: input.spend.month,
-      daily_cap_usd: input.spend.dailyCap ?? null,
-      monthly_cap_usd: input.spend.monthlyCap ?? null,
-      fraction_of_budget_used: input.spend.pressure,
-    },
+    ...(input.history ? { conversation_excerpt: input.history.slice(-4000) } : {}),
   };
 }
 
@@ -76,7 +60,7 @@ function buildQuestions(): Record<string, unknown> {
     complexity: {
       type: "score",
       instructions:
-        "How hard is `request` to do well, judged only on the work itself? Use the conversation excerpt and environment to judge scope. Ignore how much any model costs.",
+        "How hard is `request` to do well, judged only on the work itself? Use `conversation_excerpt` when provided. Ignore how much any model costs.",
       criteria: [
         "Trivial: one obvious step, no design decisions, answer is known or mechanical",
         "Moderate: a few dependent steps using familiar patterns, little ambiguity",

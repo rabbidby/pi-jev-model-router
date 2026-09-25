@@ -41,6 +41,7 @@ test("global configuration is loaded without project trust", () => {
   const config = loadConfig(project);
 
   assert.equal(config.mode, "notify");
+  assert.equal(config.historyTurns, 0);
   assert.equal(config.endpoint, "https://api.typesafe.ai/v1/systemone");
   assert.equal(config.apiKeyEnv, "TYPESAFE_API_KEY");
 });

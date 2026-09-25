@@ -301,10 +301,6 @@ async function analyse(
     {
       prompt,
       history: historyExcerpt(ctx, config.historyTurns),
-      cwd: ctx.cwd,
-      activeModel: activeKey,
-      contextTokens,
-      spend,
     },
     config,
     apiKey,

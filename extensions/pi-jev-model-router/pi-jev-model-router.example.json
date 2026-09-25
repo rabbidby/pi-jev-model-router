@@ -4,7 +4,7 @@
   "jevProvider": "openrouter",
   "useDefaultModels": true,
   "minPromptChars": 12,
-  "historyTurns": 4,
+  "historyTurns": 0,
   "timeoutMs": 3500,
   "confidenceThreshold": 0.34,
   "stickiness": true,

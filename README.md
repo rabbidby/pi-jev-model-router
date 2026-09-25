@@ -381,6 +381,25 @@ You can override `apiKeyEnv`, `endpoint`, or `jevModel` as before. `apiKey` in
 the config takes priority over the environment. For OpenRouter, the extension
 also falls back to credentials stored by pi's `/login openrouter` flow.
 
+### Data sent to Jev
+
+Each classification sends the selected Jev endpoint:
+
+- the current request text;
+- the configured Jev model identifier;
+- the fixed routing questions and task-kind taxonomy;
+- the provider credential in the HTTP authorization header.
+
+No conversation history is sent by default. Set `historyTurns` above `0` to opt
+in; this adds recent user and assistant text, capped at 600 characters per
+message and 4,000 characters in total. Images and tool results are not included.
+
+The extension never sends the working directory, active routed model, context
+token count, session ID, ledger, spend totals, or budget caps to Jev. These stay
+local and are applied by routing code after Jev returns its semantic judgment.
+Because `endpoint` is configurable, review it before opting into history and
+consult the endpoint provider's data-retention policy.
+
 A full example lives at
 [`extensions/pi-jev-model-router/pi-jev-model-router.example.json`](extensions/pi-jev-model-router/pi-jev-model-router.example.json).
 Run `/reload` after editing config.
@@ -474,7 +493,7 @@ entirely when a model's pricing is unknown, so it never blocks on guesses. Set
 | `jevModel` | provider-specific | Jev model alias |
 | `timeoutMs` | `3500` | Jev request timeout (retries 429/529) |
 | `minPromptChars` | `12` | Below this, a prompt counts as a continuation (a short *first* message is still routed) |
-| `historyTurns` | `4` | Conversation turns included as Jev state |
+| `historyTurns` | `0` | Conversation turns sent to Jev; `0` keeps history local |
 | `confidenceThreshold` | `0.34` | Below this, fall back to `standard` instead of spending premium |
 | `stickiness` | `true` | Keep the current model when it is already the chosen one |
 | `routes` | see above | Capability tier candidate chains |
