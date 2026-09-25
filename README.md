@@ -410,7 +410,11 @@ Cost is accumulated from each assistant message's computed cost into
 `~/.pi/agent/pi-jev-model-router-state.json`, together with Jev request counts.
 Daily and monthly totals include all concurrent pi sessions, while `bySession`
 keeps per-session attribution. Updates use an inter-process lock and atomic file
-replacement so parallel sessions cannot overwrite each other's deltas.
+replacement so parallel sessions cannot overwrite each other's deltas. If a
+lock or write temporarily fails, the process keeps the delta in memory, includes
+it in its local budget view, warns once, and retries on the next update and at
+session shutdown. Other processes see that delta only after the retry succeeds;
+a process crash before then can still lose it.
 
 ```
 pressure = max(today ÷ dailyUsd, month ÷ monthlyUsd)

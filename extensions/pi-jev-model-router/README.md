@@ -181,7 +181,9 @@ Spend is accumulated from each assistant message's computed cost into
 `~/.pi/agent/pi-jev-model-router-state.json`, alongside Jev request counts. Daily
 and monthly totals are shared across concurrent pi sessions, with per-session
 attribution under `bySession`. Ledger updates are inter-process locked and written
-with atomic file replacement.
+with atomic file replacement. A temporary persistence failure queues the delta
+in memory, updates the local budget view, warns once, and retries on the next
+update and at session shutdown. The queue is not crash-durable.
 
 ### Prompt-cache awareness
 

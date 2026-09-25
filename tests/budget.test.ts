@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { lock } from "proper-lockfile";
 import {
   dayKey,
   emptyLedger,
@@ -13,6 +14,7 @@ import {
   recordCost,
   recordJevUsage,
   spendSnapshot,
+  updateLedger,
 } from "../extensions/pi-jev-model-router/budget";
 
 test("costs are accumulated by UTC day, month, and model", () => {
@@ -95,6 +97,39 @@ test("concurrent process updates preserve every session delta", async () => {
     assert.equal(ledger.days[dayKey()]?.total, 2);
     assert.equal(ledger.days[dayKey()]?.bySession["session-0"]?.total, 1);
     assert.equal(ledger.days[dayKey()]?.bySession["session-1"]?.total, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed ledger write is queued and persisted with the next update", async () => {
+  const root = mkdtempSync(join(tmpdir(), "jev-ledger-retry-"));
+  const file = join(root, "ledger.json");
+  const release = await lock(file, { realpath: false });
+  try {
+    const pending = await updateLedger(file, {
+      type: "cost",
+      sessionId: "session-a",
+      modelKey: "test/model",
+      usd: 0.4,
+    });
+    assert.equal(pending.persisted, false);
+    assert.equal(pending.pendingUpdates, 1);
+    assert.equal(pending.ledger.days[dayKey()]?.total, 0.4);
+  } finally {
+    await release();
+  }
+
+  try {
+    const recovered = await updateLedger(file, {
+      type: "cost",
+      sessionId: "session-b",
+      modelKey: "test/model",
+      usd: 0.6,
+    });
+    assert.equal(recovered.persisted, true);
+    assert.equal(recovered.pendingUpdates, 0);
+    assert.equal(loadLedger(file).days[dayKey()]?.total, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

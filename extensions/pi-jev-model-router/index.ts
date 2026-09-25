@@ -14,11 +14,13 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import { apiKeyFor, loadConfig, TIERS, type JevRouterConfig } from "./config";
 import {
+  flushLedger,
   formatUsd,
   loadLedger,
   spendSnapshot,
   updateLedger,
   type Ledger,
+  type LedgerUpdateResult,
 } from "./budget";
 import { classifyRequest, JevError, type RouteAnalysis } from "./jev";
 import {
@@ -36,6 +38,7 @@ interface Runtime {
   ledger: Ledger;
   models: AvailableModel[];
   sessionId?: string;
+  ledgerPersistenceFailed?: boolean;
   lastDecision?: Decision;
   lastAnalysis?: RouteAnalysis;
   lastPrompt?: string;
@@ -280,6 +283,30 @@ function statusLine(ctx: ExtensionContext, runtime: Runtime): void {
   setStatus(ctx, parts.join(" · "));
 }
 
+function acceptLedgerUpdate(
+  result: LedgerUpdateResult,
+  ctx: ExtensionContext,
+  runtime: Runtime,
+): void {
+  runtime.ledger = result.ledger;
+  if (!result.persisted) {
+    if (!runtime.ledgerPersistenceFailed) {
+      const detail = result.error ? `: ${result.error}` : "";
+      notify(
+        ctx,
+        `jev-router: ledger persistence failed; ${result.pendingUpdates} update(s) queued for retry${detail}`,
+        "warning",
+      );
+    }
+    runtime.ledgerPersistenceFailed = true;
+    return;
+  }
+  if (runtime.ledgerPersistenceFailed) {
+    notify(ctx, "jev-router: queued ledger updates persisted", "info");
+  }
+  runtime.ledgerPersistenceFailed = false;
+}
+
 async function analyse(
   prompt: string,
   ctx: ExtensionContext,
@@ -308,12 +335,16 @@ async function analyse(
   );
 
   if (analysis.usage) {
-    runtime.ledger = await updateLedger(config.stateFile, {
-      type: "jev",
-      sessionId: runtime.sessionId,
-      inputTokens: analysis.usage.input_tokens,
-      outputTokens: analysis.usage.output_tokens,
-    });
+    acceptLedgerUpdate(
+      await updateLedger(config.stateFile, {
+        type: "jev",
+        sessionId: runtime.sessionId,
+        inputTokens: analysis.usage.input_tokens,
+        outputTokens: analysis.usage.output_tokens,
+      }),
+      ctx,
+      runtime,
+    );
   }
   const decision = decide(analysis, config, {
     models: runtime.models,
@@ -545,6 +576,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
     runtime.ledger = loadLedger(runtime.config.stateFile);
     runtime.models = toAvailable(ctx);
     runtime.sessionId = sessionIdFor(ctx);
+    runtime.ledgerPersistenceFailed = false;
     runtime.appliedTierIndex = tierForModel(currentModelKey(ctx), runtime.config);
     statusLine(ctx, runtime);
     if (runtime.config.enabled && !(await apiKeyForContext(runtime.config, ctx))) {
@@ -562,6 +594,10 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
     }
   });
 
+  pi.on("session_shutdown", async (_event, ctx) => {
+    acceptLedgerUpdate(await flushLedger(runtime.config.stateFile), ctx, runtime);
+  });
+
   pi.on("model_select", async (_event, ctx) => {
     runtime.models = toAvailable(ctx);
     runtime.appliedTierIndex = tierForModel(currentModelKey(ctx), runtime.config);
@@ -569,7 +605,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
   });
 
   // Spend accounting: every assistant message carries its computed cost.
-  pi.on("message_end", async (event) => {
+  pi.on("message_end", async (event, ctx) => {
     const message = event.message as {
       role?: string;
       provider?: string;
@@ -580,12 +616,16 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
     const cost = message.usage?.cost?.total;
     const key = message.provider && message.model ? `${message.provider}/${message.model}` : "unknown";
     if (typeof cost === "number" && cost > 0) {
-      runtime.ledger = await updateLedger(runtime.config.stateFile, {
-        type: "cost",
-        sessionId: runtime.sessionId,
-        modelKey: key,
-        usd: cost,
-      });
+      acceptLedgerUpdate(
+        await updateLedger(runtime.config.stateFile, {
+          type: "cost",
+          sessionId: runtime.sessionId,
+          modelKey: key,
+          usd: cost,
+        }),
+        ctx,
+        runtime,
+      );
     }
   });
 

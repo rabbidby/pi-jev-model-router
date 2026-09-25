@@ -3,6 +3,7 @@ import { after, beforeEach, test } from "node:test";
 import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { lock } from "proper-lockfile";
 
 const root = mkdtempSync(join(tmpdir(), "jev-router-extension-"));
 const previousHome = process.env.HOME;
@@ -252,6 +253,34 @@ test("extension accounting persists deltas under the current session id", async 
     inputTokens: 12,
     outputTokens: 3,
   });
+});
+
+test("ledger persistence failures warn once and flush on session shutdown", async () => {
+  const standard = { provider: "test", id: "standard" };
+  writeConfig({ standard: [{ provider: "test", model: "standard" }] });
+  const harness = await createHarness([standard]);
+  await harness.handlers.session_start({}, harness.ctx);
+  const ledgerFile = join(root, "ledger.json");
+  const release = await lock(ledgerFile, { realpath: false });
+  try {
+    for (const total of [0.5, 0.25]) {
+      await harness.handlers.message_end({
+        message: {
+          role: "assistant",
+          provider: "test",
+          model: "standard",
+          usage: { cost: { total } },
+        },
+      }, harness.ctx);
+    }
+  } finally {
+    await release();
+  }
+
+  assert.equal(harness.notifications.filter((message) => /queued for retry/.test(message)).length, 1);
+  await harness.handlers.session_shutdown({}, harness.ctx);
+  assert.equal(loadLedger(ledgerFile).days[dayKey()]?.total, 0.75);
+  assert.match(harness.notifications.at(-1) ?? "", /queued ledger updates persisted/);
 });
 
 test("jev_route signals missing credentials by throwing", async () => {

@@ -36,6 +36,16 @@ export type LedgerUpdate =
   | { type: "cost"; modelKey: string; usd: number; sessionId?: string }
   | { type: "jev"; inputTokens?: number; outputTokens?: number; sessionId?: string };
 
+export interface LedgerUpdateResult {
+  ledger: Ledger;
+  persisted: boolean;
+  pendingUpdates: number;
+  error?: string;
+}
+
+const pendingByFile = new Map<string, LedgerUpdate[]>();
+const updateChains = new Map<string, Promise<LedgerUpdateResult>>();
+
 export function emptyLedger(): Ledger {
   return {
     version: 2,
@@ -208,12 +218,20 @@ async function writeLedgerAtomically(file: string, ledger: Ledger): Promise<void
   }
 }
 
-/**
- * Apply one delta to the latest on-disk ledger under an inter-process lock.
- * Returns the latest readable ledger if persistence fails; accounting must not
- * prevent routing or message delivery.
- */
-export async function updateLedger(file: string, update: LedgerUpdate): Promise<Ledger> {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function persistUpdates(
+  file: string,
+  update?: LedgerUpdate,
+): Promise<LedgerUpdateResult> {
+  const pending = pendingByFile.get(file) ?? [];
+  const batch = update ? [...pending, update] : [...pending];
+  if (batch.length === 0) {
+    return { ledger: loadLedger(file), persisted: true, pendingUpdates: 0 };
+  }
+
   let release: (() => Promise<void>) | undefined;
   let compromised: Error | undefined;
   try {
@@ -228,15 +246,53 @@ export async function updateLedger(file: string, update: LedgerUpdate): Promise<
       },
     });
     const ledger = loadLedger(file);
-    applyUpdate(ledger, update);
+    for (const item of batch) applyUpdate(ledger, item);
     if (compromised) throw compromised;
     await writeLedgerAtomically(file, ledger);
-    return ledger;
-  } catch {
-    return loadLedger(file);
+    pendingByFile.delete(file);
+    return { ledger, persisted: true, pendingUpdates: 0 };
+  } catch (error) {
+    pendingByFile.set(file, batch);
+    const ledger = loadLedger(file);
+    for (const item of batch) applyUpdate(ledger, item);
+    return {
+      ledger,
+      persisted: false,
+      pendingUpdates: batch.length,
+      error: errorMessage(error),
+    };
   } finally {
     await release?.().catch(() => {});
   }
+}
+
+function enqueuePersistence(
+  file: string,
+  update?: LedgerUpdate,
+): Promise<LedgerUpdateResult> {
+  const previous = updateChains.get(file);
+  const result = previous
+    ? previous.then(
+        () => persistUpdates(file, update),
+        () => persistUpdates(file, update),
+      )
+    : persistUpdates(file, update);
+  updateChains.set(file, result);
+  const clearChain = () => {
+    if (updateChains.get(file) === result) updateChains.delete(file);
+  };
+  void result.then(clearChain, clearChain);
+  return result;
+}
+
+/** Apply one delta to the latest ledger and queue it locally when persistence fails. */
+export function updateLedger(file: string, update: LedgerUpdate): Promise<LedgerUpdateResult> {
+  return enqueuePersistence(file, update);
+}
+
+/** Retry any deltas queued after an earlier persistence failure. */
+export function flushLedger(file: string): Promise<LedgerUpdateResult> {
+  return enqueuePersistence(file);
 }
 
 export interface SpendSnapshot {
