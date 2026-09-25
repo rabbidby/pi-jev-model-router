@@ -169,7 +169,6 @@ export function decide(
   }
 
   // Budget guard: hard pressure forces the cheap tier unless the work is clearly architectural.
-  let downgraded = false;
   const hardBudgetCapped = spend.pressure >= config.budget.hardRatio && spend.pressure > 0;
   if (hardBudgetCapped) {
     const forced = demand >= 2.5 ? 1 : 0;
@@ -178,13 +177,11 @@ export function decide(
         `budget ${(spend.pressure * 100).toFixed(0)}% of cap (${formatUsd(spend.today)} today) → capped at ${TIERS[forced]}`,
       );
       index = forced;
-      downgraded = true;
     }
   } else if (spend.pressure >= config.budget.softRatio && spend.pressure > 0) {
     if (index > 0) {
       notes.push(`budget ${(spend.pressure * 100).toFixed(0)}% of cap → one tier down`);
       index -= 1;
-      downgraded = true;
     }
   }
 
@@ -234,9 +231,10 @@ export function decide(
   const usedKindChain = available.kindSpecialised;
   if (available.tierIndex !== index) {
     notes.push(`${TIERS[index]} chain unavailable → ${TIERS[available.tierIndex]}`);
-    downgraded = available.tierIndex < index;
     index = available.tierIndex;
   }
+
+  const downgraded = index < desiredIndex;
 
   // Cache guard: a model switch discards the provider's prompt cache, so the next
   // request re-reads the whole prefix at full input price. Only pay that when the
@@ -279,7 +277,7 @@ export function decide(
         tierIndex: currentIndex,
         demandScore: demand,
         budgetPressure: spend.pressure,
-        downgraded: false,
+        downgraded: currentIndex < desiredIndex,
         lowConfidenceFallback,
         kindSpecialised: false,
         held: true,

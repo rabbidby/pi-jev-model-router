@@ -55,6 +55,26 @@ test("a downward availability fallback reports the tier that supplied the model"
   assert.deepEqual(decision.notes, ["high chain unavailable → standard"]);
 });
 
+test("downgraded describes the final tier relative to the desired tier", () => {
+  const value = config();
+  value.routes.standard = [{ provider: "openai-codex", model: "unavailable-standard" }];
+  value.routes.high = [{ provider: "openai-codex", model: "high-available" }];
+
+  const decision = decide(analysis(3), value, {
+    models: [{ provider: "openai-codex", id: "high-available" }],
+    spend: { today: 10, month: 10, pressure: 1 },
+  });
+
+  assert.ok(decision);
+  assert.equal(decision.desiredTier, "premium");
+  assert.equal(decision.tier, "high");
+  assert.equal(decision.downgraded, true);
+  assert.deepEqual(decision.notes, [
+    "budget 100% of cap ($10.00 today) → capped at standard",
+    "standard chain unavailable → high",
+  ]);
+});
+
 test("a hard budget cap takes priority over prompt-cache retention", () => {
   const value = config();
   value.cache = { aware: true, deadband: 0.25, maxPenaltyUsd: 999, bypassTierDelta: 2 };
