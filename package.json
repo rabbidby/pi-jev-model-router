@@ -21,6 +21,11 @@
   ],
   "license": "MIT",
   "type": "module",
+  "scripts": {
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/da-vinci-noob/pi-jev-model-router.git"
@@ -50,5 +55,11 @@
     "@earendil-works/pi-tui": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-tui": "^0.87.1",
+    "@types/node": "^26.6.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
   }
 }

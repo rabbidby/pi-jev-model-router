@@ -283,7 +283,7 @@ async function analyse(
   if (runtime.models.length === 0) runtime.models = toAvailable(ctx);
   const spend = spendSnapshot(runtime.ledger, config.budget);
   // Context size prices the cache miss a switch would cause.
-  const contextTokens = ctx.getContextUsage?.()?.tokens;
+  const contextTokens = ctx.getContextUsage?.()?.tokens ?? undefined;
   const activeKey = currentModelKey(ctx);
 
   const analysis = await classifyRequest(

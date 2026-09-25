@@ -539,6 +539,8 @@ over `image`).
 ```bash
 git clone https://github.com/da-vinci-noob/pi-jev-model-router
 cd pi-jev-model-router
+npm install
+npm run check
 
 # load the package into a throwaway pi run (ignores auto-discovered extensions)
 pi -ne -e "$PWD" -p "Explain what an idempotency key does."
