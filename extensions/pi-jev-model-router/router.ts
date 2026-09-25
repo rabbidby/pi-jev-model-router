@@ -170,7 +170,8 @@ export function decide(
 
   // Budget guard: hard pressure forces the cheap tier unless the work is clearly architectural.
   let downgraded = false;
-  if (spend.pressure >= config.budget.hardRatio && spend.pressure > 0) {
+  const hardBudgetCapped = spend.pressure >= config.budget.hardRatio && spend.pressure > 0;
+  if (hardBudgetCapped) {
     const forced = demand >= 2.5 ? 1 : 0;
     if (forced < index) {
       notes.push(
@@ -243,6 +244,7 @@ export function decide(
   // clears the current band, or a same-tier specialist swap that is cheap enough.
   if (
     config.cache.aware &&
+    !hardBudgetCapped &&
     currentIndex !== undefined &&
     currentModel &&
     (available.model.provider !== currentModel.provider || available.model.id !== currentModel.id)
