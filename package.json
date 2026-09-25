@@ -59,7 +59,11 @@
   "devDependencies": {
     "@earendil-works/pi-tui": "^0.87.1",
     "@types/node": "^26.6.2",
+    "@types/proper-lockfile": "^4.1.4",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "proper-lockfile": "^4.1.2"
   }
 }

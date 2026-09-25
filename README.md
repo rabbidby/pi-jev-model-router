@@ -389,6 +389,9 @@ Run `/reload` after editing config.
 
 Cost is accumulated from each assistant message's computed cost into
 `~/.pi/agent/pi-jev-model-router-state.json`, together with Jev request counts.
+Daily and monthly totals include all concurrent pi sessions, while `bySession`
+keeps per-session attribution. Updates use an inter-process lock and atomic file
+replacement so parallel sessions cannot overwrite each other's deltas.
 
 ```
 pressure = max(today ÷ dailyUsd, month ÷ monthlyUsd)
@@ -559,11 +562,12 @@ Layout:
 | `extensions/pi-jev-model-router/router.ts` | composition (`decide`), tier/kind chains, availability fallback |
 | `extensions/pi-jev-model-router/budget.ts` | spend ledger, caps, pressure |
 
-No runtime dependencies: the extension talks to TypeSafe or OpenRouter with plain
-`fetch`. It imports `typebox` (tool schema) and `@earendil-works/pi-coding-agent` (config
-directory path), and loads `@earendil-works/pi-tui` **lazily**, only when the host
-implements `registerEntryRenderer`. `@earendil-works/pi-tui` is declared as an
-**optional** peer dependency, so hosts that don't ship it still install and run.
+The extension talks to TypeSafe or OpenRouter with plain `fetch` and uses
+`proper-lockfile` to serialize spend-ledger updates across pi processes. It imports
+`typebox` (tool schema) and `@earendil-works/pi-coding-agent` (config directory path),
+and loads `@earendil-works/pi-tui` **lazily**, only when the host implements
+`registerEntryRenderer`. `@earendil-works/pi-tui` is declared as an **optional** peer
+dependency, so hosts that don't ship it still install and run.
 
 ## Compatibility with pi builds and forks
 

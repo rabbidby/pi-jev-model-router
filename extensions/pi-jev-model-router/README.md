@@ -163,7 +163,10 @@ Rules of thumb baked into the defaults:
   (clearly architectural), which is allowed to stay at `standard`
 
 Spend is accumulated from each assistant message's computed cost into
-`~/.pi/agent/pi-jev-model-router-state.json`, alongside Jev request counts.
+`~/.pi/agent/pi-jev-model-router-state.json`, alongside Jev request counts. Daily
+and monthly totals are shared across concurrent pi sessions, with per-session
+attribution under `bySession`. Ledger updates are inter-process locked and written
+with atomic file replacement.
 
 ### Prompt-cache awareness
 

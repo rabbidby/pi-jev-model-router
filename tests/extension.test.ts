@@ -18,6 +18,7 @@ process.env.HOME = join(root, "home");
 for (const key of Object.keys(previousEnv)) delete process.env[key];
 
 const { configPaths } = await import("../extensions/pi-jev-model-router/config");
+const { dayKey, loadLedger } = await import("../extensions/pi-jev-model-router/budget");
 const { default: extension } = await import("../extensions/pi-jev-model-router/index");
 const configFile = configPaths().global;
 mkdirSync(dirname(configFile), { recursive: true });
@@ -28,6 +29,7 @@ interface ModelFixture {
 }
 
 function writeConfig(routes: Record<string, unknown[]>): void {
+  rmSync(join(root, "ledger.json"), { force: true });
   writeFileSync(
     configFile,
     JSON.stringify({
@@ -83,7 +85,10 @@ async function createHarness(
       find: (provider: string, id: string) =>
         models.find((model) => model.provider === provider && model.id === id),
     },
-    sessionManager: { buildContextEntries: () => [] },
+    sessionManager: {
+      buildContextEntries: () => [],
+      getSessionId: () => "session-test",
+    },
     getContextUsage: () => ({ tokens: 100 }),
     ui: {
       setStatus() {},
@@ -209,6 +214,44 @@ test("an already-active model still receives its configured thinking level", asy
   assert.deepEqual(harness.shownChoices, []);
   assert.deepEqual(harness.switched, []);
   assert.deepEqual(harness.thinking, ["medium"]);
+});
+
+test("extension accounting persists deltas under the current session id", async () => {
+  const standard = { provider: "test", id: "standard" };
+  writeConfig({ standard: [{ provider: "test", model: "standard" }] });
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        answers: {
+          task_kind: { choice: "chat", confidence: 1, probabilities: { chat: 1 } },
+          complexity: { score: 1, confidence: 1 },
+          capability_deserved: { score: 1, confidence: 1 },
+          needs_deep_reasoning: { noul: 0.5 },
+        },
+        usage: { input_tokens: 12, output_tokens: 3 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+  const harness = await createHarness([standard]);
+  await harness.handlers.session_start({}, harness.ctx);
+
+  await route(harness);
+  await harness.handlers.message_end({
+    message: {
+      role: "assistant",
+      provider: "test",
+      model: "standard",
+      usage: { cost: { total: 0.5 } },
+    },
+  });
+
+  const ledger = loadLedger(join(root, "ledger.json"));
+  assert.equal(ledger.days[dayKey()]?.bySession["session-test"]?.total, 0.5);
+  assert.deepEqual(ledger.jev.bySession["session-test"], {
+    requests: 1,
+    inputTokens: 12,
+    outputTokens: 3,
+  });
 });
 
 test("jev_route signals missing credentials by throwing", async () => {

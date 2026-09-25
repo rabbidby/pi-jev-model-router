@@ -16,10 +16,8 @@ import { apiKeyFor, loadConfig, TIERS, type JevRouterConfig } from "./config";
 import {
   formatUsd,
   loadLedger,
-  recordCost,
-  recordJevUsage,
-  saveLedger,
   spendSnapshot,
+  updateLedger,
   type Ledger,
 } from "./budget";
 import { classifyRequest, JevError, type RouteAnalysis } from "./jev";
@@ -37,6 +35,7 @@ interface Runtime {
   config: JevRouterConfig;
   ledger: Ledger;
   models: AvailableModel[];
+  sessionId?: string;
   lastDecision?: Decision;
   lastAnalysis?: RouteAnalysis;
   lastPrompt?: string;
@@ -192,6 +191,17 @@ function currentModelKey(ctx: ExtensionContext): string | undefined {
   return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 }
 
+function sessionIdFor(ctx: ExtensionContext): string | undefined {
+  try {
+    const manager = ctx.sessionManager as { getSessionId?: () => string };
+    return typeof manager.getSessionId === "function"
+      ? manager.getSessionId.call(ctx.sessionManager)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function historyExcerpt(ctx: ExtensionContext, turns: number): string | undefined {
   if (turns <= 0) return undefined;
   const lines: string[] = [];
@@ -281,6 +291,7 @@ async function analyse(
     return { error: missingApiKeyMessage(config) };
   }
   if (runtime.models.length === 0) runtime.models = toAvailable(ctx);
+  runtime.ledger = loadLedger(config.stateFile);
   const spend = spendSnapshot(runtime.ledger, config.budget);
   // Context size prices the cache miss a switch would cause.
   const contextTokens = ctx.getContextUsage?.()?.tokens ?? undefined;
@@ -300,8 +311,14 @@ async function analyse(
     ctx.signal,
   );
 
-  if (analysis.usage) recordJevUsage(runtime.ledger, analysis.usage.input_tokens, analysis.usage.output_tokens);
-  saveLedger(config.stateFile, runtime.ledger);
+  if (analysis.usage) {
+    runtime.ledger = await updateLedger(config.stateFile, {
+      type: "jev",
+      sessionId: runtime.sessionId,
+      inputTokens: analysis.usage.input_tokens,
+      outputTokens: analysis.usage.output_tokens,
+    });
+  }
   const decision = decide(analysis, config, {
     models: runtime.models,
     spend,
@@ -531,6 +548,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
     runtime.config = loadConfig(ctx.cwd, projectTrusted);
     runtime.ledger = loadLedger(runtime.config.stateFile);
     runtime.models = toAvailable(ctx);
+    runtime.sessionId = sessionIdFor(ctx);
     runtime.appliedTierIndex = tierForModel(currentModelKey(ctx), runtime.config);
     statusLine(ctx, runtime);
     if (runtime.config.enabled && !(await apiKeyForContext(runtime.config, ctx))) {
@@ -546,10 +564,6 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
         );
       }
     }
-  });
-
-  pi.on("session_shutdown", async () => {
-    saveLedger(runtime.config.stateFile, runtime.ledger);
   });
 
   pi.on("model_select", async (_event, ctx) => {
@@ -570,8 +584,12 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
     const cost = message.usage?.cost?.total;
     const key = message.provider && message.model ? `${message.provider}/${message.model}` : "unknown";
     if (typeof cost === "number" && cost > 0) {
-      recordCost(runtime.ledger, key, cost);
-      saveLedger(runtime.config.stateFile, runtime.ledger);
+      runtime.ledger = await updateLedger(runtime.config.stateFile, {
+        type: "cost",
+        sessionId: runtime.sessionId,
+        modelKey: key,
+        usd: cost,
+      });
     }
   });
 
