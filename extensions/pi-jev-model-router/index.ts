@@ -53,6 +53,7 @@ const ACK_PATTERN = /^(y|yes|yeah|yep|ok|okay|sure|continue|go on|go ahead|do it
 interface DecisionEntry {
   action: "switched" | "kept" | "notified" | "skipped";
   tier: string;
+  desiredTier?: string;
   model: string;
   kind: string;
   kindConfidence: number;
@@ -61,8 +62,10 @@ interface DecisionEntry {
   deepReasoning: number;
   demand: number;
   pressure: number;
+  kindSpecialised?: boolean;
   reason: string;
   notes: string[];
+  trace?: Decision["trace"];
   /** Set when the router deliberately did not consult Jev for this prompt. */
   skipReason?: string;
   at: number;
@@ -71,7 +74,15 @@ interface DecisionEntry {
 function appendEntry(data: DecisionEntry, runtime: Runtime): void {
   // `appendEntry` is optional across pi builds and forks.
   if (!api || typeof api.appendEntry !== "function") return;
-  const signature = `${data.action}|${data.skipReason ?? ""}|${data.model}|${data.reason}`;
+  const signature = [
+    data.action,
+    data.skipReason ?? "",
+    data.tier,
+    data.model,
+    data.reason,
+    data.trace?.selectedBy ?? "",
+    ...data.notes,
+  ].join("|");
   if (runtime.lastEntrySignature === signature) return;
   runtime.lastEntrySignature = signature;
   try {
@@ -99,19 +110,36 @@ function setStatus(ctx: ExtensionContext, text: string): void {
   }
 }
 
+interface DecisionEntryOverrides {
+  tier?: string;
+  model?: string;
+  kindSpecialised?: boolean;
+  trace?: Decision["trace"];
+}
+
+function cloneDecisionTrace(trace: Decision["trace"]): Decision["trace"] {
+  return {
+    ...trace,
+    composition: { ...trace.composition },
+    steps: trace.steps.map((step) => ({ ...step })),
+  };
+}
+
 function appendDecisionEntry(
   analysis: RouteAnalysis,
   decision: Decision,
   action: DecisionEntry["action"],
   runtime: Runtime,
+  overrides: DecisionEntryOverrides = {},
 ): void {
-  const model = decision.model
+  const model = overrides.model ?? (decision.model
     ? `${decision.model.provider}/${decision.model.id}`
-    : `${decision.target.provider}/${decision.target.model}`;
+    : `${decision.target.provider}/${decision.target.model}`);
   appendEntry(
     {
       action,
-      tier: decision.tier,
+      tier: overrides.tier ?? decision.tier,
+      desiredTier: decision.desiredTier,
       model,
       kind: analysis.kind,
       kindConfidence: analysis.kindConfidence,
@@ -120,8 +148,10 @@ function appendDecisionEntry(
       deepReasoning: analysis.deepReasoning,
       demand: decision.demandScore,
       pressure: decision.budgetPressure,
+      kindSpecialised: overrides.kindSpecialised ?? decision.kindSpecialised,
       reason: decision.reason,
       notes: [...decision.notes],
+      trace: cloneDecisionTrace(overrides.trace ?? decision.trace),
       at: Date.now(),
     },
     runtime,
@@ -431,17 +461,44 @@ async function applyDecision(
     const choices = [recommendedOption, ...(cheaperOption ? [cheaperOption] : []), keepOption];
     const choice = await ctx.ui.select(`Jev suggests ${decision.tier}\n${detail}`, choices);
     if (!choice || choice === keepOption) {
-      appendDecisionEntry(analysis, decision, "skipped", runtime);
+      const keptModel = currentModelKey(ctx) ?? "current model";
+      const keptIndex = tierForModel(keptModel, runtime.config);
+      const keptTier = keptIndex === undefined ? "current" : TIERS[keptIndex];
+      const trace = cloneDecisionTrace(decision.trace);
+      trace.selectedBy = "user";
+      trace.steps.push({
+        gate: "user",
+        outcome: "held",
+        fromTier: decision.tier,
+        toTier: keptTier,
+        summary: `confirm selection kept ${keptTier}`,
+      });
+      appendDecisionEntry(analysis, decision, "skipped", runtime, {
+        tier: keptTier,
+        model: keptModel,
+        kindSpecialised: false,
+        trace,
+      });
       return { action: "skipped", message: "kept current model" };
     }
     if (choice === cheaperOption && cheaper && cheaperAvailable) {
+      const recommendedTier = decision.tier;
       decision.model = cheaperAvailable.model;
       decision.target = cheaperAvailable.target;
       decision.tier = cheaper;
       decision.tierIndex = tierIndex(cheaper);
-      decision.downgraded = true;
+      decision.downgraded = decision.tierIndex < tierIndex(decision.desiredTier);
       decision.kindSpecialised = false;
-      decision.notes.push(`confirm selection → ${cheaper}`);
+      const confirmation = `confirm selection → ${cheaper}`;
+      decision.notes.push(confirmation);
+      decision.trace.selectedBy = "user";
+      decision.trace.steps.push({
+        gate: "user",
+        outcome: "changed",
+        fromTier: recommendedTier,
+        toTier: cheaper,
+        summary: confirmation,
+      });
     } else if (choice !== recommendedOption) {
       appendDecisionEntry(analysis, decision, "skipped", runtime);
       return { action: "skipped", message: "kept current model" };
@@ -502,6 +559,66 @@ function setThinking(level: string): void {
   }
 }
 
+interface TraceSection {
+  title: string;
+  lines: string[];
+}
+
+function traceMarker(outcome: Decision["trace"]["steps"][number]["outcome"]): string {
+  return outcome === "passed" ? "✓" : outcome === "held" ? "=" : "↳";
+}
+
+function decisionTraceSections(data: {
+  trace: Decision["trace"];
+  tier: string;
+  model: string;
+  kindSpecialised?: boolean;
+  action?: DecisionEntry["action"];
+}): TraceSection[] {
+  const composition = data.trace.composition;
+  const reasoning = composition.reasoningAdjustment >= 0
+    ? `+${composition.reasoningAdjustment.toFixed(2)}`
+    : composition.reasoningAdjustment.toFixed(2);
+  return [
+    {
+      title: "Composition",
+      lines: [
+        `weighted demand: ${composition.weightedDemand.toFixed(2)}`,
+        `reasoning adjustment: ${reasoning}`,
+        `kind floor: ${composition.kindFloor}`,
+        `demand: ${composition.demand.toFixed(2)} → desired ${composition.desiredTier}`,
+      ],
+    },
+    {
+      title: "Policy gates",
+      lines: data.trace.steps.map((step) =>
+        `${traceMarker(step.outcome)} ${step.gate}: ${step.summary}`),
+    },
+    {
+      title: "Final",
+      lines: [
+        `actual tier: ${data.tier}`,
+        `model: ${data.model}`,
+        `selected by: ${data.trace.selectedBy}`,
+        `route: ${data.kindSpecialised ? "kind specialist" : "tier chain"}`,
+        ...(data.action ? [`action: ${data.action}`] : []),
+      ],
+    },
+  ];
+}
+
+function formatDecisionTrace(decision: Decision): string {
+  const { target } = decisionPresentation(decision);
+  return decisionTraceSections({
+    trace: decision.trace,
+    tier: decision.tier,
+    model: target,
+    kindSpecialised: decision.kindSpecialised,
+  })
+    .flatMap((section) => [section.title, ...section.lines.map((line) => `  ${line}`)])
+    .join("\n");
+}
+
 function formatAnalysis(analysis: RouteAnalysis): string {
   const probs = Object.entries(analysis.kindProbabilities)
     .sort((a, b) => b[1] - a[1])
@@ -553,24 +670,85 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
           box.addChild(new Text(theme.fg("dim", `using ${data.model}`), 0, 0));
           return box;
         }
-        box.addChild(new Text(theme.fg("dim", data.reason), 0, 0));
-        if (data.notes.length > 0) {
-          box.addChild(new Text(theme.fg("dim", data.notes.map((note) => `· ${note}`).join("\n")), 0, 0));
-        }
-        if (expanded) {
+        if (data.trace) {
+          const desiredTier = data.desiredTier ?? data.trace.composition.desiredTier;
           box.addChild(
             new Text(
               theme.fg(
                 "dim",
-                `kind ${data.kind} (conf ${data.kindConfidence.toFixed(2)}) · ` +
-                  `complexity ${data.complexity.toFixed(2)}/3 · capability ${data.capability.toFixed(2)}/3 · ` +
-                  `deep reasoning ${(data.deepReasoning * 100).toFixed(0)}% · demand ${data.demand.toFixed(2)}` +
-                  (data.pressure > 0 ? ` · budget ${(data.pressure * 100).toFixed(0)}% of cap` : ""),
+                `${data.kind} · demand ${data.demand.toFixed(2)} · desired ${desiredTier} → actual ${data.tier}`,
               ),
               0,
               0,
             ),
           );
+          const changed = data.trace.steps.filter((step) => step.outcome !== "passed");
+          if (!expanded && changed.length > 0) {
+            box.addChild(
+              new Text(
+                theme.fg(
+                  "dim",
+                  changed
+                    .map((step) => `· ${step.gate}: ${step.fromTier} → ${step.toTier}`)
+                    .join("\n"),
+                ),
+                0,
+                0,
+              ),
+            );
+          }
+          if (expanded) {
+            box.addChild(new Text(theme.bold("Jev judgment"), 0, 0));
+            box.addChild(
+              new Text(
+                theme.fg(
+                  "dim",
+                  `  kind: ${data.kind} (${(data.kindConfidence * 100).toFixed(0)}% confidence)\n` +
+                    `  complexity: ${data.complexity.toFixed(2)}/3\n` +
+                    `  capability: ${data.capability.toFixed(2)}/3\n` +
+                    `  deep reasoning: ${(data.deepReasoning * 100).toFixed(0)}%`,
+                ),
+                0,
+                0,
+              ),
+            );
+            for (const section of decisionTraceSections({
+              trace: data.trace,
+              tier: data.tier,
+              model: data.model,
+              kindSpecialised: data.kindSpecialised,
+              action: data.action,
+            })) {
+              box.addChild(new Text(theme.bold(section.title), 0, 0));
+              box.addChild(
+                new Text(
+                  theme.fg("dim", section.lines.map((line) => `  ${line}`).join("\n")),
+                  0,
+                  0,
+                ),
+              );
+            }
+          }
+        } else {
+          box.addChild(new Text(theme.fg("dim", data.reason), 0, 0));
+          if (data.notes.length > 0) {
+            box.addChild(new Text(theme.fg("dim", data.notes.map((note) => `· ${note}`).join("\n")), 0, 0));
+          }
+          if (expanded) {
+            box.addChild(
+              new Text(
+                theme.fg(
+                  "dim",
+                  `kind ${data.kind} (conf ${data.kindConfidence.toFixed(2)}) · ` +
+                    `complexity ${data.complexity.toFixed(2)}/3 · capability ${data.capability.toFixed(2)}/3 · ` +
+                    `deep reasoning ${(data.deepReasoning * 100).toFixed(0)}% · demand ${data.demand.toFixed(2)}` +
+                    (data.pressure > 0 ? ` · budget ${(data.pressure * 100).toFixed(0)}% of cap` : ""),
+                ),
+                0,
+                0,
+              ),
+            );
+          }
         }
         return box;
       });
@@ -755,8 +933,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
             [
               formatAnalysis(analysis),
               "",
-              decision ? describeDecision(decision) : "no route available",
-              decision?.notes.length ? decision.notes.join("\n") : "",
+              decision ? formatDecisionTrace(decision) : "no route available",
             ]
               .filter(Boolean)
               .join("\n"),
@@ -824,8 +1001,8 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
         return;
       }
       const { analysis, decision } = result;
-      notify(ctx, 
-        [formatAnalysis(analysis), "", decision ? describeDecision(decision) : "no route available"].join("\n"),
+      notify(ctx,
+        [formatAnalysis(analysis), "", decision ? formatDecisionTrace(decision) : "no route available"].join("\n"),
         "info",
       );
     },
@@ -849,8 +1026,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
       const text = [
         formatAnalysis(analysis),
         "",
-        decision ? describeDecision(decision) : "no route available",
-        decision?.notes.length ? `notes: ${decision.notes.join("; ")}` : "",
+        decision ? formatDecisionTrace(decision) : "no route available",
       ]
         .filter(Boolean)
         .join("\n");

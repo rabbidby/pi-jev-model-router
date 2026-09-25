@@ -35,14 +35,17 @@ semantic read of the request.
 always see which model the request went to and why:
 
 ```
-jev-router → high  openai/gpt-5.3-codex
-implement · complexity 1.70/3 · capability 1.55/3 · reasoning 0.82 → high
-· budget 12% of cap → one tier down
+jev-router → standard  openai/gpt-5.3-codex
+implement · demand 2.24 · desired high → actual standard
+· budget: high → standard
 ```
 
-Expand the entry (same key as other collapsible content) to see the raw judgment:
-kind and its confidence, complexity, capability deserved, deep-reasoning
-probability, composed demand score, and budget pressure.
+The collapsed entry shows only the desired tier, actual tier, and gates that
+changed the decision. Expand it to see four sections: **Jev judgment**,
+**Composition**, **Policy gates**, and **Final**. The trace records confidence,
+budget, availability, cache, and explicit confirm-mode choices as structured
+steps instead of reconstructing them from display strings. `/jev-router why` and
+`/jev-route` print the same trace as text.
 
 The glyph encodes the action: `→` switched, `=` already active (stickiness),
 `•` notify-only mode, `×` skipped (kept current / unavailable). Entries are stored

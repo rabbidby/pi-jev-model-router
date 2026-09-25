@@ -55,7 +55,7 @@ test("a downward availability fallback reports the tier that supplied the model"
   assert.deepEqual(decision.notes, ["high chain unavailable → standard"]);
 });
 
-test("downgraded describes the final tier relative to the desired tier", () => {
+test("decision trace records composition and every routing gate", () => {
   const value = config();
   value.routes.standard = [{ provider: "openai-codex", model: "unavailable-standard" }];
   value.routes.high = [{ provider: "openai-codex", model: "high-available" }];
@@ -69,6 +69,28 @@ test("downgraded describes the final tier relative to the desired tier", () => {
   assert.equal(decision.desiredTier, "premium");
   assert.equal(decision.tier, "high");
   assert.equal(decision.downgraded, true);
+  assert.deepEqual(decision.trace.composition, {
+    weightedDemand: 3,
+    reasoningAdjustment: 0,
+    kindFloor: "quick",
+    demand: 3,
+    desiredTier: "premium",
+  });
+  assert.equal(decision.trace.selectedBy, "availability");
+  assert.deepEqual(
+    decision.trace.steps.map(({ gate, outcome, fromTier, toTier }) => ({
+      gate,
+      outcome,
+      fromTier,
+      toTier,
+    })),
+    [
+      { gate: "confidence", outcome: "passed", fromTier: "premium", toTier: "premium" },
+      { gate: "budget", outcome: "changed", fromTier: "premium", toTier: "standard" },
+      { gate: "availability", outcome: "changed", fromTier: "standard", toTier: "high" },
+      { gate: "cache", outcome: "passed", fromTier: "high", toTier: "high" },
+    ],
+  );
   assert.deepEqual(decision.notes, [
     "budget 100% of cap ($10.00 today) → capped at standard",
     "standard chain unavailable → high",

@@ -54,6 +54,7 @@ async function createHarness(
   const switched: string[] = [];
   const thinking: string[] = [];
   const notifications: string[] = [];
+  const entries: Array<{ type: string; data: Record<string, any> }> = [];
   let shownChoices: string[] = [];
   let currentModel = initialModel;
   let selectStrategy = (choices: string[]) => choices[0];
@@ -64,6 +65,9 @@ async function createHarness(
     },
     registerTool(definition: any) {
       tools[definition.name] = definition;
+    },
+    appendEntry(type: string, data: Record<string, any>) {
+      entries.push({ type, data });
     },
     async setModel(model: ModelFixture) {
       switched.push(`${model.provider}/${model.id}`);
@@ -110,6 +114,7 @@ async function createHarness(
     switched,
     thinking,
     notifications,
+    entries,
     ctx,
     get shownChoices() {
       return shownChoices;
@@ -185,6 +190,17 @@ test("confirm mode selects the first available cheaper fallback and reports it",
   assert.deepEqual(harness.switched, ["test/quick-available"]);
   assert.match(harness.notifications.at(-1) ?? "", /^Jev → quick \(test\/quick-available\)/);
   assert.match(harness.notifications.at(-1) ?? "", /confirm selection → quick/);
+  const entry = harness.entries.at(-1)?.data;
+  assert.equal(entry?.desiredTier, "standard");
+  assert.equal(entry?.tier, "quick");
+  assert.equal(entry?.trace.selectedBy, "user");
+  assert.deepEqual(entry?.trace.steps.at(-1), {
+    gate: "user",
+    outcome: "changed",
+    fromTier: "standard",
+    toTier: "quick",
+    summary: "confirm selection → quick",
+  });
 });
 
 test("confirm mode does not offer the current model as a cheaper alternative", async () => {
@@ -204,6 +220,34 @@ test("confirm mode does not offer the current model as a cheaper alternative", a
     "Keep test/quick",
   ]);
   assert.deepEqual(harness.switched, ["test/standard"]);
+});
+
+test("confirm mode records keeping the current model as a user trace step", async () => {
+  const standard = { provider: "test", id: "standard" };
+  const quick = { provider: "test", id: "quick" };
+  writeConfig({
+    quick: [{ provider: "test", model: "quick" }],
+    standard: [{ provider: "test", model: "standard" }],
+  });
+  const harness = await createHarness([standard, quick], quick);
+  harness.choose((choices) => choices.at(-1));
+  await harness.handlers.session_start({}, harness.ctx);
+
+  await route(harness);
+
+  assert.deepEqual(harness.switched, []);
+  const entry = harness.entries.at(-1)?.data;
+  assert.equal(entry?.action, "skipped");
+  assert.equal(entry?.tier, "quick");
+  assert.equal(entry?.model, "test/quick");
+  assert.equal(entry?.trace.selectedBy, "user");
+  assert.deepEqual(entry?.trace.steps.at(-1), {
+    gate: "user",
+    outcome: "held",
+    fromTier: "standard",
+    toTier: "quick",
+    summary: "confirm selection kept quick",
+  });
 });
 
 test("routing excludes available models outside the session model scope", async () => {

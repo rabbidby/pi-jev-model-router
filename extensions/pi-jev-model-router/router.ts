@@ -13,6 +13,31 @@ export interface AvailableModel {
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
+export type DecisionGate = "confidence" | "budget" | "availability" | "cache" | "user";
+export type DecisionGateOutcome = "passed" | "changed" | "held";
+export type DecisionSelectionSource = "judgment" | DecisionGate;
+export type DecisionTraceTier = Tier | "current";
+
+export interface DecisionTraceStep {
+  gate: DecisionGate;
+  outcome: DecisionGateOutcome;
+  fromTier: DecisionTraceTier;
+  toTier: DecisionTraceTier;
+  summary: string;
+}
+
+export interface DecisionTrace {
+  composition: {
+    weightedDemand: number;
+    reasoningAdjustment: number;
+    kindFloor: Tier;
+    demand: number;
+    desiredTier: Tier;
+  };
+  selectedBy: DecisionSelectionSource;
+  steps: DecisionTraceStep[];
+}
+
 export interface Decision {
   /** Tier chosen by the semantic judgment, before affordability. */
   desiredTier: Tier;
@@ -27,6 +52,7 @@ export interface Decision {
   lowConfidenceFallback: boolean;
   /** True when kind-specific models (not the generic tier chain) were used. */
   kindSpecialised: boolean;
+  trace: DecisionTrace;
   /** True when the router deliberately stayed put to preserve the prompt cache. */
   held?: boolean;
   reason: string;
@@ -141,10 +167,10 @@ export function decide(
   const notes: string[] = [];
   const { spend } = options;
 
-  let demand = 0.55 * analysis.complexity + 0.45 * analysis.budgetIntensity;
-  if (analysis.deepReasoning >= 0.65) demand += 0.75;
-  else if (analysis.deepReasoning <= 0.2) demand -= 0.25;
-  demand = clamp(demand, 0, 3);
+  const weightedDemand = 0.55 * analysis.complexity + 0.45 * analysis.budgetIntensity;
+  const reasoningAdjustment =
+    analysis.deepReasoning >= 0.65 ? 0.75 : analysis.deepReasoning <= 0.2 ? -0.25 : 0;
+  let demand = clamp(weightedDemand + reasoningAdjustment, 0, 3);
 
   const kindFloor = tierIndex(config.kindMinimumTier[analysis.kind] ?? "quick");
   if (demand < kindFloor) {
@@ -155,8 +181,20 @@ export function decide(
   const desiredIndex = clamp(Math.round(demand), 0, TIERS.length - 1);
   let index = desiredIndex;
   let lowConfidenceFallback = false;
+  const trace: DecisionTrace = {
+    composition: {
+      weightedDemand,
+      reasoningAdjustment,
+      kindFloor: TIERS[kindFloor],
+      demand,
+      desiredTier: TIERS[desiredIndex],
+    },
+    selectedBy: "judgment",
+    steps: [],
+  };
 
   // Confidence guard: don't spend premium money on an unsure classification.
+  const confidenceTier = index;
   if (
     config.confidenceThreshold > 0 &&
     analysis.kindConfidence > 0 &&
@@ -166,9 +204,23 @@ export function decide(
     notes.push(`low kind confidence ${analysis.kindConfidence.toFixed(2)} → standard`);
     index = 1;
     lowConfidenceFallback = true;
+    trace.selectedBy = "confidence";
   }
+  trace.steps.push({
+    gate: "confidence",
+    outcome: index === confidenceTier ? "passed" : "changed",
+    fromTier: TIERS[confidenceTier],
+    toTier: TIERS[index],
+    summary:
+      index === confidenceTier
+        ? config.confidenceThreshold <= 0
+          ? "confidence guard disabled"
+          : `kind confidence ${analysis.kindConfidence.toFixed(2)} kept ${TIERS[index]}`
+        : notes.at(-1) ?? `confidence guard selected ${TIERS[index]}`,
+  });
 
   // Budget guard: hard pressure forces the cheap tier unless the work is clearly architectural.
+  const budgetTier = index;
   const hardBudgetCapped = spend.pressure >= config.budget.hardRatio && spend.pressure > 0;
   if (hardBudgetCapped) {
     const forced = demand >= 2.5 ? 1 : 0;
@@ -177,13 +229,27 @@ export function decide(
         `budget ${(spend.pressure * 100).toFixed(0)}% of cap (${formatUsd(spend.today)} today) → capped at ${TIERS[forced]}`,
       );
       index = forced;
+      trace.selectedBy = "budget";
     }
   } else if (spend.pressure >= config.budget.softRatio && spend.pressure > 0) {
     if (index > 0) {
       notes.push(`budget ${(spend.pressure * 100).toFixed(0)}% of cap → one tier down`);
       index -= 1;
+      trace.selectedBy = "budget";
     }
   }
+  trace.steps.push({
+    gate: "budget",
+    outcome: index === budgetTier ? "passed" : "changed",
+    fromTier: TIERS[budgetTier],
+    toTier: TIERS[index],
+    summary:
+      index === budgetTier
+        ? spend.dailyCap === undefined && spend.monthlyCap === undefined
+          ? "budget caps not configured"
+          : `budget pressure ${(spend.pressure * 100).toFixed(0)}% kept ${TIERS[index]}`
+        : notes.at(-1) ?? `budget policy selected ${TIERS[index]}`,
+  });
 
   // Candidate order: kind specialists for the chosen tier, then the tier chain,
   // then neighbouring tiers (nearest first) so an unavailable model never blocks routing.
@@ -229,10 +295,22 @@ export function decide(
   const currentModel = options.current?.model;
 
   const usedKindChain = available.kindSpecialised;
+  const availabilityTier = index;
   if (available.tierIndex !== index) {
     notes.push(`${TIERS[index]} chain unavailable → ${TIERS[available.tierIndex]}`);
     index = available.tierIndex;
+    trace.selectedBy = "availability";
   }
+  trace.steps.push({
+    gate: "availability",
+    outcome: index === availabilityTier ? "passed" : "changed",
+    fromTier: TIERS[availabilityTier],
+    toTier: TIERS[index],
+    summary:
+      index === availabilityTier
+        ? `${usedKindChain ? "kind specialist" : `${TIERS[index]} route`} selected ${available.model.provider}/${available.model.id}`
+        : notes.at(-1) ?? `availability fallback selected ${TIERS[index]}`,
+  });
 
   const downgraded = index < desiredIndex;
 
@@ -269,6 +347,14 @@ export function decide(
 
     if (holdReason) {
       notes.push(holdReason);
+      trace.selectedBy = "cache";
+      trace.steps.push({
+        gate: "cache",
+        outcome: "held",
+        fromTier: TIERS[index],
+        toTier: TIERS[currentIndex],
+        summary: holdReason,
+      });
       return {
         desiredTier: TIERS[desiredIndex],
         tier: TIERS[currentIndex],
@@ -280,6 +366,7 @@ export function decide(
         downgraded: currentIndex < desiredIndex,
         lowConfidenceFallback,
         kindSpecialised: false,
+        trace,
         held: true,
         reason:
           `${analysis.kind} · complexity ${analysis.complexity.toFixed(2)}/3 · ` +
@@ -289,6 +376,18 @@ export function decide(
       };
     }
   }
+
+  trace.steps.push({
+    gate: "cache",
+    outcome: "passed",
+    fromTier: TIERS[index],
+    toTier: TIERS[index],
+    summary: !config.cache.aware
+      ? "cache guard disabled"
+      : hardBudgetCapped
+        ? "hard budget cap bypassed cache retention"
+        : "cache guard did not hold the selected model",
+  });
 
   const reason =
     `${analysis.kind} · complexity ${analysis.complexity.toFixed(2)}/3 · ` +
@@ -306,6 +405,7 @@ export function decide(
     downgraded,
     lowConfidenceFallback,
     kindSpecialised: usedKindChain,
+    trace,
     reason,
     notes,
   };

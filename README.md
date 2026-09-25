@@ -122,8 +122,9 @@ Start pi and type a request. Before the turn runs, the router announces the
 decision:
 
 ```
-jev-router → high  openai/gpt-5.3-codex
-implement · complexity 1.70/3 · capability 1.55/3 · reasoning 0.82 → high
+jev-router → standard  openai/gpt-5.3-codex
+implement · demand 2.24 · desired high → actual standard
+· budget: high → standard
 ```
 
 The status bar shows `jev-router:<tier> · $spend · %cap`, or `jev-router:off` when
@@ -151,16 +152,23 @@ Every decision is a durable entry in the transcript, so the chosen model and its
 justification are always available:
 
 ```
-jev-router → high  openai/gpt-5.3-codex
-implement · complexity 1.70/3 · capability 1.55/3 · reasoning 0.82 → high
-· budget 12% of cap → one tier down
+jev-router → standard  openai/gpt-5.3-codex
+implement · demand 2.24 · desired high → actual standard
+· budget: high → standard
 ```
 
 The glyph encodes the action: `→` switched, `=` already active (stickiness),
-`•` notify-only mode, `×` skipped. Expand the entry for the raw judgment: kind
-and confidence, complexity, capability deserved, deep-reasoning probability,
-composed demand, and budget pressure. Entries are stored in the session but never
-sent to the LLM, so they cost no context.
+`•` notify-only mode, `×` skipped. The collapsed entry shows the semantic desired
+tier, actual tier, and only the gates that changed the decision. Expand it for a
+four-part trace:
+
+1. **Jev judgment** — kind, confidence, complexity, capability, reasoning.
+2. **Composition** — weighted demand, reasoning adjustment, kind floor, desired tier.
+3. **Policy gates** — confidence, budget, availability, cache, and user confirmation.
+4. **Final** — actual tier, model, route source, action, and selecting gate.
+
+`/jev-router why` and `/jev-route` print the same trace as text. Entries are stored
+in the session but never sent to the LLM, so they cost no context.
 
 Prompts that are deliberately not routed are shown too, so behaviour is never
 silently missing:
