@@ -164,20 +164,26 @@ function toAvailable(ctx: ExtensionContext): AvailableModel[] {
   try {
     const list = ctx.modelRegistry?.getAvailable?.();
     if (!Array.isArray(list)) return [];
-    return list.map((model) => ({
-      provider: model.provider,
-      id: model.id,
-      name: model.name,
-      reasoning: model.reasoning,
-      cost: model.cost
-        ? {
-            input: model.cost.input,
-            output: model.cost.output,
-            cacheRead: model.cost.cacheRead,
-            cacheWrite: model.cost.cacheWrite,
-          }
-        : undefined,
-    }));
+    const scoped = ctx.scopedModels;
+    const scopedKeys = Array.isArray(scoped) && scoped.length > 0
+      ? new Set(scoped.map(({ model }) => `${model.provider}/${model.id}`))
+      : undefined;
+    return list
+      .filter((model) => !scopedKeys || scopedKeys.has(`${model.provider}/${model.id}`))
+      .map((model) => ({
+        provider: model.provider,
+        id: model.id,
+        name: model.name,
+        reasoning: model.reasoning,
+        cost: model.cost
+          ? {
+              input: model.cost.input,
+              output: model.cost.output,
+              cacheRead: model.cost.cacheRead,
+              cacheWrite: model.cost.cacheWrite,
+            }
+          : undefined,
+      }));
   } catch {
     return [];
   }

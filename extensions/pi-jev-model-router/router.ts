@@ -46,11 +46,7 @@ export function findModel(
   models: readonly AvailableModel[],
   target: RouteTarget,
 ): AvailableModel | undefined {
-  return (
-    models.find((m) => m.provider === target.provider && m.id === target.model) ??
-    models.find((m) => m.id === target.model) ??
-    undefined
-  );
+  return models.find((m) => m.provider === target.provider && m.id === target.model);
 }
 
 export function firstAvailable(
