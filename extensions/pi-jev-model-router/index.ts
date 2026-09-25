@@ -363,6 +363,21 @@ interface ApplyResult {
   message: string;
 }
 
+function decisionPresentation(decision: Decision): {
+  target: string;
+  headline: string;
+  detail: string;
+} {
+  const target = decision.model
+    ? `${decision.model.provider}/${decision.model.id}`
+    : `${decision.target.provider}/${decision.target.model}`;
+  return {
+    target,
+    headline: `Jev → ${decision.tier} (${target})`,
+    detail: `${decision.reason}${decision.notes.length ? ` · ${decision.notes.join(" · ")}` : ""}`,
+  };
+}
+
 async function applyDecision(
   analysis: RouteAnalysis,
   decision: Decision,
@@ -370,11 +385,7 @@ async function applyDecision(
   runtime: Runtime,
   options: { allowPrompt?: boolean } = {},
 ): Promise<ApplyResult> {
-  let target = decision.model
-    ? `${decision.model.provider}/${decision.model.id}`
-    : `${decision.target.provider}/${decision.target.model}`;
-  let headline = `Jev → ${decision.tier} (${target})`;
-  let detail = `${decision.reason}${decision.notes.length ? ` · ${decision.notes.join(" · ")}` : ""}`;
+  let { target, headline, detail } = decisionPresentation(decision);
   const currentKey = currentModelKey(ctx);
   const targetKey = decision.model ? `${decision.model.provider}/${decision.model.id}` : undefined;
   const keepCurrent =
@@ -410,8 +421,11 @@ async function applyDecision(
     const cheaperAvailable = cheaper
       ? firstAvailable(runtime.models, runtime.config.routes[cheaper])
       : undefined;
-    const cheaperOption = cheaper && cheaperAvailable
-      ? `Use ${cheaper} — ${cheaperAvailable.model.provider}/${cheaperAvailable.model.id}`
+    const cheaperKey = cheaperAvailable
+      ? `${cheaperAvailable.model.provider}/${cheaperAvailable.model.id}`
+      : undefined;
+    const cheaperOption = cheaper && cheaperAvailable && cheaperKey !== currentKey
+      ? `Use ${cheaper} — ${cheaperKey}`
       : undefined;
     const keepOption = `Keep ${currentModelKey(ctx) ?? "current model"}`;
     const choices = [recommendedOption, ...(cheaperOption ? [cheaperOption] : []), keepOption];
@@ -427,16 +441,13 @@ async function applyDecision(
       decision.tierIndex = tierIndex(cheaper);
       decision.downgraded = true;
       decision.kindSpecialised = false;
+      decision.notes.push(`confirm selection → ${cheaper}`);
     } else if (choice !== recommendedOption) {
       appendDecisionEntry(analysis, decision, "skipped", runtime);
       return { action: "skipped", message: "kept current model" };
     }
 
-    target = decision.model
-      ? `${decision.model.provider}/${decision.model.id}`
-      : `${decision.target.provider}/${decision.target.model}`;
-    headline = `Jev → ${decision.tier} (${target})`;
-    detail = `${decision.reason}${decision.notes.length ? ` · ${decision.notes.join(" · ")}` : ""}`;
+    ({ target, headline, detail } = decisionPresentation(decision));
   }
 
   const model =

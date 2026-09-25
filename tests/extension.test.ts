@@ -184,6 +184,26 @@ test("confirm mode selects the first available cheaper fallback and reports it",
   assert.equal(harness.shownChoices[1], "Use quick — test/quick-available");
   assert.deepEqual(harness.switched, ["test/quick-available"]);
   assert.match(harness.notifications.at(-1) ?? "", /^Jev → quick \(test\/quick-available\)/);
+  assert.match(harness.notifications.at(-1) ?? "", /confirm selection → quick/);
+});
+
+test("confirm mode does not offer the current model as a cheaper alternative", async () => {
+  const standard = { provider: "test", id: "standard" };
+  const quick = { provider: "test", id: "quick" };
+  writeConfig({
+    quick: [{ provider: "test", model: "quick" }],
+    standard: [{ provider: "test", model: "standard" }],
+  });
+  const harness = await createHarness([standard, quick], quick);
+  await harness.handlers.session_start({}, harness.ctx);
+
+  await route(harness);
+
+  assert.deepEqual(harness.shownChoices, [
+    "Use standard — test/standard",
+    "Keep test/quick",
+  ]);
+  assert.deepEqual(harness.switched, ["test/standard"]);
 });
 
 test("routing excludes available models outside the session model scope", async () => {
