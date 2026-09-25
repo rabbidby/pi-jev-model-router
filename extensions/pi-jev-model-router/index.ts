@@ -778,7 +778,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const result = await analyse(params.request, ctx, runtime);
       if ("error" in result) {
-        return { content: [{ type: "text", text: `jev_route error: ${result.error}` }], isError: true };
+        throw new Error(`jev_route: ${result.error}`);
       }
       const { analysis, decision } = result;
       const text = [
